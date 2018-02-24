@@ -41,9 +41,12 @@ class TxSetFrame
 
     std::vector<TransactionFramePtr> sortForApply();
 
-    bool checkValid(Application& app) const;
+    bool checkValid(Application& app);
     void trimInvalid(Application& app,
                      std::vector<TransactionFramePtr>& trimmed);
+    bool checkOrTrim(Application& app,
+                     std::function<bool(TransactionFramePtr, SequenceNumber)> processInvalidTxLambda,
+                     std::function<bool(std::vector<TransactionFramePtr> const&)> processLastInvalidTxLambda);
     void surgePricingFilter(LedgerManager const& lm);
 
     void removeTx(TransactionFramePtr tx);
