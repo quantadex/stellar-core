@@ -257,7 +257,7 @@ namespace int128 {
 
 }  // namespace int128
 
-int main()
+int main_for_unit_test()
 {
     int128::mytests();
     return 0;

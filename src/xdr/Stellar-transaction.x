@@ -25,7 +25,8 @@ enum OperationType
     ALLOW_TRUST = 7,
     ACCOUNT_MERGE = 8,
     INFLATION = 9,
-    MANAGE_DATA = 10
+    MANAGE_DATA = 10,
+    SETTLEMENT = 110
 };
 
 /* CreateAccount
@@ -221,6 +222,36 @@ struct ManageDataOp
     DataValue* dataValue;   // set to null to clear
 };
 
+/* Settlement
+    settlement blockchain op for matched orders
+
+    Threshold: med
+
+    Result: SettlementResult
+*/
+/***** Matched Order for settlement  ****/
+struct MatchedOrder
+{
+    string  transactionID<>; /* hash of this structure */
+    string  buyer<>;
+    string  seller<>;
+    int64   amountBuy;
+    int64   amountSell;
+    Asset   assetBuy;
+    Asset   assetSell;
+};
+
+typedef MatchedOrder MatchedOrders<>;
+
+struct SettlementOp
+{
+    string settlementHash<>;
+    string parentSettlementHash<>;
+    MatchedOrders matchedOrders;
+};
+
+
+
 /* An operation is the lowest unit of work that a transaction does */
 struct Operation
 {
@@ -253,6 +284,8 @@ struct Operation
         void;
     case MANAGE_DATA:
         ManageDataOp manageDataOp;
+    case SETTLEMENT:
+         SettlementOp settlementOp;
     }
     body;
 };
@@ -645,6 +678,22 @@ case MANAGE_DATA_SUCCESS:
 default:
     void;
 };
+/************ Settlement Result ****************/
+enum SettlementResultCode
+{
+    SETTLEMENT_SUCCESS = 0,
+    /**failure codes - placeholders ****/
+    SETTLEMENT_NOT_SUPPORTED_YET = -1, /** The network hasn't moved to this protocol change yet**/
+    SETTLEMENT_INVALID_INORDER_TOTAL = -2 /** see yellowpaper(4.1) ***/
+};
+
+union SettlementResult switch (SettlementResultCode code)
+{
+case SETTLEMENT_SUCCESS:
+    void;
+default:
+    void;
+};
 
 /* High level Operation Result */
 
@@ -683,6 +732,8 @@ case opINNER:
         InflationResult inflationResult;
     case MANAGE_DATA:
         ManageDataResult manageDataResult;
+    case SETTLEMENT:
+         SettlementResult settlementResult;
     }
     tr;
 default:

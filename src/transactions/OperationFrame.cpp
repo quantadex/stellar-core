@@ -19,6 +19,7 @@
 #include "transactions/PaymentOpFrame.h"
 #include "transactions/SetOptionsOpFrame.h"
 #include "transactions/TransactionFrame.h"
+#include "transactions/SettlementOpFrame.h"
 #include "util/Logging.h"
 #include "xdrpp/marshal.h"
 #include <string>
@@ -79,6 +80,8 @@ OperationFrame::makeHelper(Operation const& op, OperationResult& res,
         return std::make_shared<InflationOpFrame>(op, res, tx);
     case MANAGE_DATA:
         return std::make_shared<ManageDataOpFrame>(op, res, tx);
+    case SETTLEMENT:
+        return std::make_shared<SettlementOpFrame>(op, res, tx);
 
     default:
         ostringstream err;
