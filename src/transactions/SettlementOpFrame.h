@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "transactions/OperationFrame.h"
+#include "ledger/TrustFrame.h"
 
 namespace stellar
 {
@@ -17,6 +18,16 @@ class SettlementOpFrame : public OperationFrame
     }
     
     SettlementOp const& mSettlement;
+
+    // Trust frames for buyer and seller for buy and sell assets
+    TrustFrame::pointer mSellAssetBuyer;
+    TrustFrame::pointer mBuyAssetBuyer;
+
+    TrustFrame::pointer mSellAssetSeller;
+    TrustFrame::pointer mBuyAssetSeller;
+
+    AccountFrame::pointer mAccBuyer;
+    AccountFrame::pointer mAccSeller;
 
 public:
     SettlementOpFrame(Operation const& op, OperationResult& res,
@@ -31,5 +42,12 @@ public:
     {
         return res.tr().settlementResult().code();
     }
+
+    SettlementResultCode validateTrustlines(AccountID const& accountId,
+                                           Asset const& buyAss, Asset const& sellAss,
+                                           medida::MetricsRegistry& metrics,
+                                           Database& db, LedgerDelta& delta,
+                                           TrustFrame::pointer &trustLineBuyAsset,
+                                           TrustFrame::pointer &trustLineSellAsset);
 };
 }
