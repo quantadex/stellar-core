@@ -232,25 +232,20 @@ struct ManageDataOp
 /***** Matched Order for settlement  ****/
 struct MatchedOrder
 {
-    string  transactionID<>; /* hash of this structure */
-    string  buyer<>;
-    string  seller<>;
+    AccountID  buyer;
+    AccountID  seller;
     int64   amountBuy;
     int64   amountSell;
     Asset   assetBuy;
     Asset   assetSell;
 };
 
-typedef MatchedOrder MatchedOrders<>;
-
 struct SettlementOp
 {
     string settlementHash<>;
     string parentSettlementHash<>;
-    MatchedOrders matchedOrders;
+    MatchedOrder matchedOrders<>;
 };
-
-
 
 /* An operation is the lowest unit of work that a transaction does */
 struct Operation
@@ -684,13 +679,25 @@ enum SettlementResultCode
     SETTLEMENT_SUCCESS = 0,
     /**failure codes - placeholders ****/
     SETTLEMENT_NOT_SUPPORTED_YET = -1, /** The network hasn't moved to this protocol change yet**/
-    SETTLEMENT_INVALID_INORDER_TOTAL = -2 /** see yellowpaper(4.1) ***/
+    SETTLEMENT_MALFORMED = -2, /* invalid asset(s) or amount(s) */
+    SETTLEMENT_CROSS_SELF = -3, /* same buyer and seller */
+    SETTLEMENT_SELL_NO_ISSUER = -4,
+    SETTLEMENT_SELL_NO_TRUST = -5,
+    SETTLEMENT_SELL_NOT_AUTHORIZED = -6,
+    SETTLEMENT_BUY_NO_ISSUER = -7, 
+    SETTLEMENT_BUY_NO_TRUST = -8,
+    SETTLEMENT_BUY_NOT_AUTHORIZED = -9,
+    SETTLEMENT_LINE_FULL = -10,
+    SETTLEMENT_SELLER_LINE_FULL = -11,
+    SETTLEMENT_BUY_OVER_LIMIT = -12,
+    SETTLEMENT_SELL_OVER_BALANCE = -13
+    /** not checked - TODO SETTLEMENT_INVALID_INORDER_TOTAL = -2 see yellowpaper(4.1) ***/
 };
 
 union SettlementResult switch (SettlementResultCode code)
 {
 case SETTLEMENT_SUCCESS:
-    void;
+    SettlementResultCode codesVec<>;
 default:
     void;
 };

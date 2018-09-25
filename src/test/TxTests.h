@@ -96,6 +96,10 @@ Operation pathPayment(PublicKey const& to, Asset const& sendCur,
                       int64_t sendMax, Asset const& destCur, int64_t destAmount,
                       std::vector<Asset> const& path);
 
+Operation settlement( PublicKey const& buyerID, PublicKey const& sellerID,
+                      int64_t buyAmount, int64_t sellAmount,
+                      Asset const& buyAsset, Asset const& sellAsset);
+    
 Operation manageOffer(uint64 offerId, Asset const& selling, Asset const& buying,
                       Price const& price, int64_t amount);
 

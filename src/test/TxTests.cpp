@@ -363,6 +363,24 @@ pathPayment(PublicKey const& to, Asset const& sendCur, int64_t sendMax,
     return op;
 }
 
+//Simple settlement with one MatchedOrder
+Operation
+settlement( PublicKey const& buyerID, PublicKey const& sellerID,
+            int64_t buyAmount, int64_t sellAmount,
+            Asset const& buyAsset, Asset const& sellAsset)
+{
+    Operation op;
+    op.body.type(SETTLEMENT);
+    SettlementOp& sop = op.body.settlementOp();
+
+    MatchedOrder mo(buyerID, sellerID, buyAmount, sellAmount,
+                      buyAsset,  sellAsset);
+    sop.matchedOrders.push_back(mo);
+
+    return op;
+}
+            
+
 Operation
 createPassiveOffer(Asset const& selling, Asset const& buying,
                    Price const& price, int64_t amount)
