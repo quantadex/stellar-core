@@ -677,9 +677,9 @@ default:
 enum SettlementResultCode
 {
     SETTLEMENT_SUCCESS = 0,
-    /**failure codes - placeholders ****/
+    /**failure codes ****/
     SETTLEMENT_NOT_SUPPORTED_YET = -1, /** The network hasn't moved to this protocol change yet**/
-    SETTLEMENT_MALFORMED = -2, /* invalid asset(s) or amount(s) */
+    SETTLEMENT_INVALID_ASSET = -2, /* invalid asset(s) */
     SETTLEMENT_CROSS_SELF = -3, /* same buyer and seller */
     SETTLEMENT_SELL_NO_ISSUER = -4,
     SETTLEMENT_SELL_NO_TRUST = -5,
@@ -690,7 +690,11 @@ enum SettlementResultCode
     SETTLEMENT_LINE_FULL = -10,
     SETTLEMENT_SELLER_LINE_FULL = -11,
     SETTLEMENT_BUY_OVER_LIMIT = -12,
-    SETTLEMENT_SELL_OVER_BALANCE = -13
+    SETTLEMENT_SELL_OVER_BALANCE = -13,
+    SETTLEMENT_NEGATIVE_AMOUNT = -14,
+    SETTLEMENT_ASSETS_IDENTICAL = -15,
+    SETTLEMENT_BUYER_ACCOUNT_INVALID = -16,
+    SETTLEMENT_SELLER_ACCOUNT_INVALID = -17
     /** not checked - TODO SETTLEMENT_INVALID_INORDER_TOTAL = -2 see yellowpaper(4.1) ***/
 };
 

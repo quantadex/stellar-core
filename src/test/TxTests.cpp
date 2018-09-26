@@ -379,7 +379,16 @@ settlement( PublicKey const& buyerID, PublicKey const& sellerID,
 
     return op;
 }
-            
+
+// settlement with several MatchedOrders
+Operation settlement( xdr::xvector<MatchedOrder> const & morda)
+{
+    Operation op;
+    op.body.type(SETTLEMENT);
+    SettlementOp& sop = op.body.settlementOp();
+    sop.matchedOrders = morda;
+    return op;
+}
 
 Operation
 createPassiveOffer(Asset const& selling, Asset const& buying,

@@ -59,18 +59,30 @@ TEST_CASE("settlement", "[tx][settlement]")
 
     int64_t trustLineStartingBalance = 20000;
 
-    // sets up gateway account - issuers of the assets
+    // create buyer and seller accounts
+    auto b1 = root.create("buyer", paymentAmount);
+    auto s1 = root.create("seller", paymentAmount);
+ 
+    // set up gateway account - issuers of the assets
     const int64_t gatewayPayment = minBalance2 + morePayment;
     auto gateway = root.create("gate", gatewayPayment);
 
-    // sets up gateway2 account
+    // set up gateway2 account
     auto gateway2 = root.create("gate2", gatewayPayment);
     // issue  assets
     Asset idr = makeAsset(gateway, "IDR");
     Asset usd = makeAsset(gateway2, "USD");
-    AccountFrame::pointer rootAccount, settlerAccount;
-    rootAccount = loadAccount(root, *app);
+    AccountFrame::pointer rootAccount, settlerAccount, b1Account, s1Account;
+    rootAccount = loadAccount(root, *app);;
+    b1Account = loadAccount(b1, *app);
+    s1Account = loadAccount(s1, *app);
     settlerAccount = loadAccount(settler, *app);
+
+    // unlimited trust for both assets to both accts
+    b1.changeTrust(idr, trustLineLimit);
+    b1.changeTrust(usd, trustLineLimit);
+    s1.changeTrust(idr, trustLineLimit);
+    s1.changeTrust(usd, trustLineLimit);
     
     REQUIRE(rootAccount->getMasterWeight() == 1);
     REQUIRE(rootAccount->getHighThreshold() == 0);
@@ -80,35 +92,35 @@ TEST_CASE("settlement", "[tx][settlement]")
     REQUIRE(settlerAccount->getHighThreshold() == 0);
     REQUIRE(settlerAccount->getLowThreshold() == 0);
     REQUIRE(settlerAccount->getMediumThreshold() == 0);
+    REQUIRE(b1Account->getBalance() == paymentAmount);
+    REQUIRE(b1Account->getMasterWeight() == 1);
+    REQUIRE(b1Account->getHighThreshold() == 0);
+    REQUIRE(b1Account->getLowThreshold() == 0);
+    REQUIRE(b1Account->getMediumThreshold() == 0);
+    REQUIRE(s1Account->getBalance() == paymentAmount);
+    REQUIRE(s1Account->getMasterWeight() == 1);
+    REQUIRE(s1Account->getHighThreshold() == 0);
+    REQUIRE(s1Account->getLowThreshold() == 0);
+    REQUIRE(s1Account->getMediumThreshold() == 0);
 
-    // root did 3 transactions at this point
-    REQUIRE( (1000000000000000000 -
-              gatewayPayment * 2 - txfee * 3 - minBalance3*1000) == rootAccount->getBalance());
-
-SECTION("prepareSimpleSettlement")
+    // root did 5 transactions at this point
+    REQUIRE( (1000000000000000000 - paymentAmount * 2 -
+              gatewayPayment * 2 - txfee * 5 - minBalance3*1000) == rootAccount->getBalance());
+    auto market = TestMarket{*app}; // convenient shortcut
+ 
+SECTION("SimpleSettlement")
 {
-    auto market = TestMarket{*app};
-    // create buyer and seller accounts
-    auto b1 = root.create("buyer", paymentAmount);
-    auto s1 = root.create("seller", paymentAmount);
-
-    // unlimited trust for both assets to both accts
-    b1.changeTrust(idr, trustLineLimit);
-    b1.changeTrust(usd, trustLineLimit);
-    s1.changeTrust(idr, trustLineLimit);
-    s1.changeTrust(usd, trustLineLimit);
-
     // pre-settlement account status
     gateway.pay(b1, idr, trustLineStartingBalance * 5);
     gateway.pay(s1, idr, trustLineStartingBalance * 2);
-    gateway2.pay(b1, usd, trustLineStartingBalance * 7); //140000
+    gateway2.pay(b1, usd, trustLineStartingBalance * 7); 
     gateway2.pay(s1, usd, trustLineStartingBalance * 3);
 
     auto b1Tli = loadTrustLine(b1, idr, *app);
     auto b1Tlu = loadTrustLine(b1, usd, *app);
     auto s1Tli = loadTrustLine(s1, idr, *app);
     auto s1Tlu = loadTrustLine(s1, usd, *app);
-
+    //buyer and seller charged for payment tx above
     market.requireBalances(
         { {b1, {{xlm, minBalance2 - txfee * 2}, {idr,trustLineStartingBalance * 5},
                                                 {usd, trustLineStartingBalance * 7}}},
@@ -135,6 +147,8 @@ SECTION("prepareSimpleSettlement")
     }
 
     // Reload the changed TrustLines. Duh...
+    // reload required for the trustlines.  account balance inquiry
+    // would do that for you
     b1Tli = loadTrustLine(b1, idr, *app);
     b1Tlu = loadTrustLine(b1, usd, *app);
     s1Tli = loadTrustLine(s1, idr, *app);
@@ -147,4 +161,57 @@ SECTION("prepareSimpleSettlement")
     REQUIRE(successes == 1);
     REQUIRE(fails == 0);
 }
+
+SECTION("MultipleMOSettlement")
+{
+    xdr::xvector<MatchedOrder> movec;
+    movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
+                                  3000, 7000, idr, usd));
+    // for an invalid account - the middle element in the vector is bad 
+    PublicKey inv = SecretKey::random().getPublicKey();
+    movec.push_back(MatchedOrder (inv, s1.getPublicKey(),
+                                  2000, 1000, idr, usd));
+    movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
+                                  2000, 1000, idr, usd));
+    // status before the test
+    gateway.pay(b1, idr, trustLineStartingBalance * 5);
+    gateway.pay(s1, idr, trustLineStartingBalance * 2);
+    gateway2.pay(b1, usd, trustLineStartingBalance * 7); 
+    gateway2.pay(s1, usd, trustLineStartingBalance * 3);
+    
+    auto b1Tli = loadTrustLine(b1, idr, *app);
+    auto b1Tlu = loadTrustLine(b1, usd, *app);
+    auto s1Tli = loadTrustLine(s1, idr, *app);
+    auto s1Tlu = loadTrustLine(s1, usd, *app);
+    REQUIRE(s1Tli->getBalance() == trustLineStartingBalance * 2);
+    REQUIRE(b1Tli->getBalance() == trustLineStartingBalance * 5 ); 
+    REQUIRE(b1Tlu->getBalance() == trustLineStartingBalance * 7);  
+    REQUIRE(s1Tlu->getBalance() == trustLineStartingBalance * 3);
+    
+    Operation sop(settlement(movec));
+    auto transf = settler.tx({sop}, 0);
+    // apply the operation.
+    applyTx(transf, *app);
+    SettlementResult res = getFirstResult(*transf).tr().settlementResult();
+    size_t fails, successes;
+    fails = successes = 0;
+    for (auto rescode : res.codesVec()) {
+        if (rescode == SETTLEMENT_SUCCESS)
+            ++successes;
+        else
+            ++fails;
+    }
+    REQUIRE(successes == 2);
+    REQUIRE(fails == 1);
+    REQUIRE(res.codesVec()[1] == SETTLEMENT_BUYER_ACCOUNT_INVALID);
+
+    market.requireBalances(
+        { {b1, {{xlm, minBalance2 - txfee * 2}, {idr,trustLineStartingBalance * 5 + 5000},
+                                                {usd, trustLineStartingBalance * 7 - 8000}}},
+            {s1, {{xlm, minBalance2 - txfee * 2}, {idr,trustLineStartingBalance * 2 - 5000},
+                                                  {usd, trustLineStartingBalance * 3 + 8000}} }
+        });
+
+}
+
 }

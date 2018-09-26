@@ -135,7 +135,7 @@ SettlementOpFrame::doApply(Application& app, LedgerDelta& delta,
                         {"op-settlement", "invalid", "buyer-account-invalid"},
                         "operation")
                     .Mark();
-                innerResult().codesVec()[ind++] =  SETTLEMENT_MALFORMED;
+                innerResult().codesVec()[ind++] = SETTLEMENT_BUYER_ACCOUNT_INVALID;
                 continue;
             }  
             mAccSeller = AccountFrame::loadAccount(sacc, app.getDatabase());
@@ -146,7 +146,7 @@ SettlementOpFrame::doApply(Application& app, LedgerDelta& delta,
                         {"op-settlement", "invalid", "seller-account-invalid"},
                         "operation")
                     .Mark();
-                innerResult().codesVec()[ind++] =   SETTLEMENT_MALFORMED;
+                innerResult().codesVec()[ind++] = SETTLEMENT_SELLER_ACCOUNT_INVALID;
                 continue;
             }
             // do trustline checks for the validated settlement, and
@@ -294,8 +294,6 @@ SettlementOpFrame::doApply(Application& app, LedgerDelta& delta,
         ++ind;
     } // matchedOrders loop
 
-    // TODO complete the new ledger entry???
-
     sqlTx.commit();
     tempDelta.commit();
     app.getMetrics()
@@ -334,19 +332,28 @@ SettlementOpFrame::doCheckValid(Application& app)
         if (!isAssetValid(sass) || !isAssetValid(bass)) {
             app.getMetrics()
                 .NewMeter(
-                    {"op-settlement", "invalid", "malformed-invalid-asset"},
+                    {"op-settlement", "invalid", "settlement-invalid-asset"},
                     "operation")
                 .Mark();
-            innerResult().codesVec()[ind++] = SETTLEMENT_MALFORMED;
+            innerResult().codesVec()[ind++] = SETTLEMENT_INVALID_ASSET;
+            continue;
+        }
+        if (matchedOrder.assetBuy == matchedOrder.assetSell) {
+            app.getMetrics()
+                .NewMeter(
+                    {"op-settlement", "invalid", "settlement_assets_identical"},
+                    "operation")
+                .Mark();
+            innerResult().codesVec()[ind++] = SETTLEMENT_ASSETS_IDENTICAL;
             continue;
         }
         if (matchedOrder.amountBuy < 0 || matchedOrder.amountSell < 0) {
             app.getMetrics()
                 .NewMeter(
-                    {"op-settlement", "invalid", "malformed-negative-amount"},
+                    {"op-settlement", "invalid", "settlement-negative-amount"},
                     "operation")
                 .Mark();
-            innerResult().codesVec()[ind++] = SETTLEMENT_MALFORMED;
+            innerResult().codesVec()[ind++] = SETTLEMENT_NEGATIVE_AMOUNT;
             continue;
         }
         if (matchedOrder.buyer == matchedOrder.seller) {

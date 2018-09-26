@@ -99,6 +99,8 @@ Operation pathPayment(PublicKey const& to, Asset const& sendCur,
 Operation settlement( PublicKey const& buyerID, PublicKey const& sellerID,
                       int64_t buyAmount, int64_t sellAmount,
                       Asset const& buyAsset, Asset const& sellAsset);
+
+Operation settlement( xdr::xvector<MatchedOrder> const & morda);                       
     
 Operation manageOffer(uint64 offerId, Asset const& selling, Asset const& buying,
                       Price const& price, int64_t amount);
