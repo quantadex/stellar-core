@@ -181,6 +181,9 @@ class Config : public std::enable_shared_from_this<Config>
 
     std::string NTP_SERVER; // ntp server used to check if time is valid on host
 
+    // PK of the Settlement account in string format
+    std::string SETTLEMENT_ACC_ID;
+
     Config();
 
     void load(std::string const& filename);

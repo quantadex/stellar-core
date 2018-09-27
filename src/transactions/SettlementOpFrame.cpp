@@ -318,12 +318,24 @@ SettlementOpFrame::doCheckValid(Application& app)
     //     innerResult().codesVec()[0] = SETTLEMENT_NOT_SUPPORTED_YET;
     //     return false;
     // }
+    xdr::xvector<stellar::SettlementResultCode>& vec = innerResult().codesVec();
+    vec.resize(mSettlement.matchedOrders.size());
+    // before processing individual MatchedOrders, make sure that the
+    // source account for this OpFrame is the settlement account (by
+    // ID from the Config)  
+    AccountID srcAccID = getSourceID(); 
+    if (KeyUtils::toStrKey(srcAccID) != app.getConfig().SETTLEMENT_ACC_ID) {
+        app.getMetrics()
+            .NewMeter(
+                {"op-settlement", "invalid", "settlement-invalid-source-acct"},
+                "operation")
+            .Mark();
+        innerResult().codesVec()[0] = SETTLEMENT_SOURCE_ACCOUNT_INVALID;
+        return false;
+    }
 
     // checking every MatchedOrder
     size_t ind = 0;
-    xdr::xvector<stellar::SettlementResultCode>& vec = innerResult().codesVec();
-    vec.resize(mSettlement.matchedOrders.size());
-
     for (auto matchedOrder : mSettlement.matchedOrders) {
         
         // check asset validity

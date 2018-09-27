@@ -25,7 +25,9 @@ using namespace stellar::txtest;
 
 TEST_CASE("settlement", "[tx][settlement]")
 {
-    Config const& cfg = getTestConfig();
+    Config & cfg = const_cast<Config&>(getTestConfig());
+    SecretKey SettlementSK = SecretKey::random();
+    cfg.SETTLEMENT_ACC_ID = SettlementSK.getStrKeyPublic();
 
     VirtualClock clock;
     auto app = createTestApplication(clock, cfg);
@@ -51,8 +53,8 @@ TEST_CASE("settlement", "[tx][settlement]")
 
     // create a special settlement account with larger balance (it'll
     // be used to pay fees for all settlements)
-    auto settler = root.create("settler", minBalance3 * 1000);
-
+    auto Settler = root.create(SettlementSK, minBalance3 * 1000);
+    
     const int64_t morePayment = paymentAmount / 2;
 
     int64_t trustLineLimit = INT64_MAX;
@@ -76,7 +78,7 @@ TEST_CASE("settlement", "[tx][settlement]")
     rootAccount = loadAccount(root, *app);;
     b1Account = loadAccount(b1, *app);
     s1Account = loadAccount(s1, *app);
-    settlerAccount = loadAccount(settler, *app);
+    settlerAccount = loadAccount(Settler, *app);
 
     // unlimited trust for both assets to both accts
     b1.changeTrust(idr, trustLineLimit);
@@ -107,7 +109,7 @@ TEST_CASE("settlement", "[tx][settlement]")
     REQUIRE( (1000000000000000000 - paymentAmount * 2 -
               gatewayPayment * 2 - txfee * 5 - minBalance3*1000) == rootAccount->getBalance());
     auto market = TestMarket{*app}; // convenient shortcut
- 
+
 SECTION("SimpleSettlement")
 {
     // pre-settlement account status
@@ -131,9 +133,9 @@ SECTION("SimpleSettlement")
     Operation sop(settlement(b1.getPublicKey(), s1.getPublicKey(),
                              25000, 15000, idr, usd));
     // create a TransactionFrame from the sop Operation, and return a
-    // shared_ptr to it. The 'settler' account is the master for the
+    // shared_ptr to it. The 'Settler' account is the source for the
     // settlement transactions
-    auto transf = settler.tx({sop}, 0);
+    auto transf = Settler.tx({sop}, 0);
     // apply the operation.
     applyTx(transf, *app);
     SettlementResult res = getFirstResult(*transf).tr().settlementResult();
@@ -148,7 +150,7 @@ SECTION("SimpleSettlement")
 
     // Reload the changed TrustLines. Duh...
     // reload required for the trustlines.  account balance inquiry
-    // would do that for you
+    // would have fresh data for you
     b1Tli = loadTrustLine(b1, idr, *app);
     b1Tlu = loadTrustLine(b1, usd, *app);
     s1Tli = loadTrustLine(s1, idr, *app);
@@ -167,8 +169,10 @@ SECTION("MultipleMOSettlement")
     xdr::xvector<MatchedOrder> movec;
     movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
                                   3000, 7000, idr, usd));
-    // for an invalid account - the middle element in the vector is bad 
+    // for an invalid account - the middle element in the vector is
+    // bad
     PublicKey inv = SecretKey::random().getPublicKey();
+
     movec.push_back(MatchedOrder (inv, s1.getPublicKey(),
                                   2000, 1000, idr, usd));
     movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
@@ -189,7 +193,7 @@ SECTION("MultipleMOSettlement")
     REQUIRE(s1Tlu->getBalance() == trustLineStartingBalance * 3);
     
     Operation sop(settlement(movec));
-    auto transf = settler.tx({sop}, 0);
+    auto transf = Settler.tx({sop}, 0);
     // apply the operation.
     applyTx(transf, *app);
     SettlementResult res = getFirstResult(*transf).tr().settlementResult();
@@ -211,7 +215,25 @@ SECTION("MultipleMOSettlement")
             {s1, {{xlm, minBalance2 - txfee * 2}, {idr,trustLineStartingBalance * 2 - 5000},
                                                   {usd, trustLineStartingBalance * 3 + 8000}} }
         });
-
 }
 
+SECTION("VerifyConfigPK")
+{
+    // a settlement transaction sourced from non-settlement account
+    // should be rejected
+    xdr::xvector<MatchedOrder> movec;
+    // same (valid) orders as in the previous section
+    movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
+                                  3000, 7000, idr, usd));
+    movec.push_back(MatchedOrder (b1.getPublicKey(), s1.getPublicKey(),
+                                  2000, 1000, idr, usd));
+
+    auto Pretender = root.create("Pretender", minBalance3 * 1000);
+    Operation sop(settlement(movec));
+    auto transf = Pretender.tx({sop}, 0);
+    // apply the operation.
+    applyTx(transf, *app);
+    SettlementResult res = getFirstResult(*transf).tr().settlementResult();
+    REQUIRE(res.codesVec()[0] == SETTLEMENT_SOURCE_ACCOUNT_INVALID);
+}
 }
