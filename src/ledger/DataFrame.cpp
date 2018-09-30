@@ -8,6 +8,7 @@
 #include "crypto/SHA.h"
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
+#include "ledger/LedgerRange.h"
 #include "transactions/ManageDataOpFrame.h"
 #include "util/basen.h"
 #include "util/types.h"
@@ -128,10 +129,6 @@ DataFrame::loadData(StatementContext& prep,
         oe.dataName = dataName;
         bn::decode_b64(dataValue, oe.dataValue);
 
-        if (!isValid(le))
-        {
-            throw std::runtime_error("Invalid DataEntry");
-        }
         dataProcessor(le);
         st.fetch();
     }
@@ -180,6 +177,36 @@ DataFrame::countObjects(soci::session& sess)
     return count;
 }
 
+uint64_t
+DataFrame::countObjects(soci::session& sess, LedgerRange const& ledgers)
+{
+    uint64_t count = 0;
+    sess << "SELECT COUNT(*) FROM accountdata"
+            " WHERE lastmodified >= :v1 AND lastmodified <= :v2;",
+        into(count), use(ledgers.first()), use(ledgers.last());
+    return count;
+}
+
+void
+DataFrame::deleteDataModifiedOnOrAfterLedger(Database& db,
+                                             uint32_t oldestLedger)
+{
+    db.getEntryCache().erase_if(
+        [oldestLedger](std::shared_ptr<LedgerEntry const> le) -> bool {
+            return le && le->data.type() == DATA &&
+                   le->lastModifiedLedgerSeq >= oldestLedger;
+        });
+
+    {
+        auto prep = db.getPreparedStatement(
+            "DELETE FROM accountdata WHERE lastmodified >= :v1");
+        auto& st = prep.statement();
+        st.exchange(soci::use(oldestLedger));
+        st.define_and_bind();
+        st.execute(true);
+    }
+}
+
 void
 DataFrame::storeDelete(LedgerDelta& delta, Database& db) const
 {
@@ -214,27 +241,9 @@ DataFrame::storeAdd(LedgerDelta& delta, Database& db)
     storeUpdateHelper(delta, db, true);
 }
 
-bool
-DataFrame::isValid(LedgerEntry const& le)
-{
-    bool res = (le.lastModifiedLedgerSeq <= INT32_MAX);
-    DataEntry const& d = le.data.data();
-
-    res = res && (d.dataName.size() > 0);
-    res = res && isString32Valid(d.dataName);
-    return res;
-}
-
-bool
-DataFrame::isValid()
-{
-    return isValid(mEntry);
-}
-
 void
 DataFrame::storeUpdateHelper(LedgerDelta& delta, Database& db, bool insert)
 {
-    assert(isValid());
     touch(delta);
 
     std::string actIDStrKey = KeyUtils::toStrKey(mData.accountID);

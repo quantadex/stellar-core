@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "bucket/Bucket.h"
+#include "bucket/BucketInputIterator.h"
 #include "database/Database.h"
 #include "util/XDRStream.h"
 #include <memory>
@@ -21,8 +22,7 @@ class Database;
 class BucketApplicator
 {
     Database& mDb;
-    std::shared_ptr<const Bucket> mBucket;
-    XDRInputFileStream mIn;
+    BucketInputIterator mBucketIter;
     size_t mSize{0};
 
   public:

@@ -3,7 +3,6 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "main/CommandHandler.h"
-#include "StellarCoreVersion.h"
 #include "crypto/Hex.h"
 #include "crypto/KeyUtils.h"
 #include "herder/Herder.h"
@@ -13,6 +12,7 @@
 #include "lib/util/format.h"
 #include "main/Application.h"
 #include "main/Config.h"
+#include "main/Maintainer.h"
 #include "overlay/BanManager.h"
 #include "overlay/OverlayManager.h"
 #include "util/Logging.h"
@@ -37,6 +37,8 @@ using std::placeholders::_2;
 
 namespace stellar
 {
+using xdr::operator<;
+
 CommandHandler::CommandHandler(Application& app) : mApp(app)
 {
     if (mApp.getConfig().HTTP_PORT)
@@ -67,43 +69,56 @@ CommandHandler::CommandHandler(Application& app) : mApp(app)
 
     mServer->add404(std::bind(&CommandHandler::fileNotFound, this, _1, _2));
 
-    mServer->addRoute("bans", std::bind(&CommandHandler::bans, this, _1, _2));
-    mServer->addRoute("catchup",
-                      std::bind(&CommandHandler::catchup, this, _1, _2));
-    mServer->addRoute("checkdb",
-                      std::bind(&CommandHandler::checkdb, this, _1, _2));
-    mServer->addRoute("checkpoint",
-                      std::bind(&CommandHandler::checkpoint, this, _1, _2));
-    mServer->addRoute("connect",
-                      std::bind(&CommandHandler::connect, this, _1, _2));
-    mServer->addRoute("dropcursor",
-                      std::bind(&CommandHandler::dropcursor, this, _1, _2));
-    mServer->addRoute("droppeer",
-                      std::bind(&CommandHandler::dropPeer, this, _1, _2));
-    mServer->addRoute("generateload",
-                      std::bind(&CommandHandler::generateLoad, this, _1, _2));
-    mServer->addRoute("info", std::bind(&CommandHandler::info, this, _1, _2));
-    mServer->addRoute("ll", std::bind(&CommandHandler::ll, this, _1, _2));
-    mServer->addRoute("logrotate",
-                      std::bind(&CommandHandler::logRotate, this, _1, _2));
-    mServer->addRoute("maintenance",
-                      std::bind(&CommandHandler::maintenance, this, _1, _2));
-    mServer->addRoute("manualclose",
-                      std::bind(&CommandHandler::manualClose, this, _1, _2));
-    mServer->addRoute("metrics",
-                      std::bind(&CommandHandler::metrics, this, _1, _2));
-    mServer->addRoute("peers", std::bind(&CommandHandler::peers, this, _1, _2));
-    mServer->addRoute("quorum",
-                      std::bind(&CommandHandler::quorum, this, _1, _2));
-    mServer->addRoute("setcursor",
-                      std::bind(&CommandHandler::setcursor, this, _1, _2));
-    mServer->addRoute("scp", std::bind(&CommandHandler::scpInfo, this, _1, _2));
-    mServer->addRoute("testacc",
-                      std::bind(&CommandHandler::testAcc, this, _1, _2));
-    mServer->addRoute("testtx",
-                      std::bind(&CommandHandler::testTx, this, _1, _2));
-    mServer->addRoute("tx", std::bind(&CommandHandler::tx, this, _1, _2));
-    mServer->addRoute("unban", std::bind(&CommandHandler::unban, this, _1, _2));
+    addRoute("bans", &CommandHandler::bans);
+    addRoute("catchup", &CommandHandler::catchup);
+    addRoute("checkdb", &CommandHandler::checkdb);
+    addRoute("connect", &CommandHandler::connect);
+    addRoute("dropcursor", &CommandHandler::dropcursor);
+    addRoute("droppeer", &CommandHandler::dropPeer);
+    addRoute("generateload", &CommandHandler::generateLoad);
+    addRoute("getcursor", &CommandHandler::getcursor);
+    addRoute("info", &CommandHandler::info);
+    addRoute("ll", &CommandHandler::ll);
+    addRoute("logrotate", &CommandHandler::logRotate);
+    addRoute("maintenance", &CommandHandler::maintenance);
+    addRoute("manualclose", &CommandHandler::manualClose);
+    addRoute("metrics", &CommandHandler::metrics);
+    addRoute("peers", &CommandHandler::peers);
+    addRoute("quorum", &CommandHandler::quorum);
+    addRoute("setcursor", &CommandHandler::setcursor);
+    addRoute("scp", &CommandHandler::scpInfo);
+    addRoute("testacc", &CommandHandler::testAcc);
+    addRoute("testtx", &CommandHandler::testTx);
+    addRoute("tx", &CommandHandler::tx);
+    addRoute("upgrades", &CommandHandler::upgrades);
+    addRoute("unban", &CommandHandler::unban);
+}
+
+void
+CommandHandler::addRoute(std::string const& name, HandlerRoute route)
+{
+    mServer->addRoute(
+        name, std::bind(&CommandHandler::safeRouter, this, route, _1, _2));
+}
+
+void
+CommandHandler::safeRouter(CommandHandler::HandlerRoute route,
+                           std::string const& params, std::string& retStr)
+{
+    try
+    {
+        route(this, params, retStr);
+    }
+    catch (std::exception& e)
+    {
+        retStr =
+            (fmt::MemoryWriter() << "{\"exception\": \"" << e.what() << "\"}")
+                .str();
+    }
+    catch (...)
+    {
+        retStr = "{\"exception\": \"generic\"}";
+    }
 }
 
 void
@@ -237,8 +252,6 @@ CommandHandler::fileNotFound(std::string const& params, std::string& retStr)
         "mode is either 'minimal' (the default, if omitted) or 'complete'."
         "</p><p><h1> /checkdb</h1>"
         "triggers the instance to perform an integrity check of the database."
-        "</p><p><h1> /checkpoint</h1>"
-        "triggers the instance to write an immediate history checkpoint."
         "</p><p><h1> /connect?peer=NAME&port=NNN</h1>"
         "triggers the instance to connect to peer NAME at port NNN."
         "</p><p><h1> "
@@ -280,6 +293,25 @@ CommandHandler::fileNotFound(std::string const& params, std::string& retStr)
         "returns a JSON object<br>"
         "wasReceived: boolean, true if transaction was queued properly<br>"
         "result: base64 encoded, XDR serialized 'TransactionResult'<br>"
+        "</p><p><h1> /upgrades?mode=(get|set|clear)&[upgradetime=DATETIME]&"
+        "[basefee=NUM]&[basereserve=NUM]&[maxtxsize=NUM]&[protocolversion=NUM]"
+        "</h1>"
+        "gets, sets or clears upgrades.<br>"
+        "When mode=set, upgradetime is a required date in the ISO 8601 "
+        "date format (UTC) in the form 1970-01-01T00:00:00Z.<br>"
+        "fee (uint32) This is what you would prefer the base fee to be. It is "
+        "in stroops<br>"
+        "basereserve (uint32) This is what you would prefer the base reserve "
+        "to be. It is in stroops.<br>"
+        "maxtxsize (uint32) This defines the maximum number of transactions "
+        "to include in a ledger. When too many transactions are pending, "
+        "surge pricing is applied. The instance picks the top maxtxsize"
+        " transactions locally to be considered in the next ledger.Where "
+        "transactions are ordered by transaction fee(lower fee transactions"
+        " are held for later).<br>"
+        "protocolversion (uint32) defines the protocol version to upgrade to."
+        " When specified it must match the protocol version supported by the"
+        " node<br>"
         "</p><p><h1> /dropcursor?id=XYZ</h1> deletes the tracking cursor with "
         "identified by `id`. See `setcursor` for more information"
         "</p><p><h1> /setcursor?id=ID&cursor=N</h1> sets or creates a cursor "
@@ -293,10 +325,13 @@ CommandHandler::fileNotFound(std::string const& params, std::string& retStr)
         "ledger sequence N the data can be safely removed by the instance."
         "The actual deletion is performed by invoking the `maintenance` "
         "endpoint."
-        "</p><p><h1> /maintenance[?queue=true]</h1> Performs maintenance tasks "
-        "on the instance."
-        "<ul><li><i>queue</i> performs deletion of queue data.See setcursor "
-        "for more information</li></ul>"
+        "</p><p><h1> /getcursor?[id=ID]</h1> gets the cursor identified by "
+        "'ID'.  If ID is not defined then all cursors will be returned."
+        "</p><p><h1> /maintenance[?queue=true[&count=N]]</h1> Performs "
+        "maintenance tasks on the instance."
+        "<ul><li><i>queue</i> performs deletion of queue data. Deletes at most "
+        "count entries from each table (defaults to 50000). See setcursor for "
+        "more information</li></ul>"
         "</p><p><h1> "
         "/unban?node=NODE_ID</h1>"
         "remove ban for PEER_ID"
@@ -322,31 +357,43 @@ CommandHandler::manualClose(std::string const& params, std::string& retStr)
     }
 }
 
-enum class Requirement
-{
-    OPTIONAL_REQ,
-    REQUIRED_REQ
-};
-
 template <typename T>
-bool
-parseNumParam(std::map<std::string, std::string> const& map,
-              std::string const& key, T& val, std::string& retStr,
-              Requirement requirement)
+optional<T>
+maybeParseNumParam(std::map<std::string, std::string> const& map,
+                   std::string const& key, T& defaultVal)
 {
     auto i = map.find(key);
     if (i != map.end())
     {
         std::stringstream str(i->second);
-        str >> val;
-        if (val == 0)
+        str >> defaultVal;
+
+        // Throw an error if not all bytes were loaded into `val`
+        if (str.fail() || !str.eof())
         {
-            retStr = fmt::format("Failed to parse '{}' argument", key);
-            return false;
+            std::string errorMsg =
+                fmt::format("Failed to parse '{}' argument", key);
+            throw std::runtime_error(errorMsg);
         }
-        return true;
+        return make_optional<T>(defaultVal);
     }
-    return requirement == Requirement::OPTIONAL_REQ;
+
+    return nullopt<T>();
+}
+
+template <typename T>
+T
+parseNumParam(std::map<std::string, std::string> const& map,
+              std::string const& key)
+{
+    T val;
+    auto res = maybeParseNumParam(map, key, val);
+    if (!res)
+    {
+        std::string errorMsg = fmt::format("'{}' argument is required!", key);
+        throw std::runtime_error(errorMsg);
+    }
+    return val;
 }
 
 void
@@ -365,12 +412,8 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
         std::map<std::string, std::string> map;
         http::server::server::parseParams(params, map);
 
-        if (!parseNumParam(map, "accounts", nAccounts, retStr,
-                           Requirement::OPTIONAL_REQ))
-            return;
-
-        if (!parseNumParam(map, "txs", nTxs, retStr, Requirement::OPTIONAL_REQ))
-            return;
+        maybeParseNumParam(map, "accounts", nAccounts);
+        maybeParseNumParam(map, "txs", nTxs);
 
         {
             auto i = map.find("txrate");
@@ -378,9 +421,10 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
             {
                 autoRate = true;
             }
-            else if (!parseNumParam(map, "txrate", txRate, retStr,
-                                    Requirement::OPTIONAL_REQ))
-                return;
+            else
+            {
+                maybeParseNumParam(map, "txrate", txRate);
+            }
         }
 
         double hours = ((nAccounts + nTxs) / txRate) / 3600.0;
@@ -397,20 +441,31 @@ CommandHandler::generateLoad(std::string const& params, std::string& retStr)
 }
 
 void
-CommandHandler::peers(std::string const& params, std::string& retStr)
+CommandHandler::peers(std::string const&, std::string& retStr)
 {
     Json::Value root;
 
-    root["peers"];
+    root["pending_peers"];
     int counter = 0;
-    for (auto peer : mApp.getOverlayManager().getPeers())
+    for (auto peer : mApp.getOverlayManager().getPendingPeers())
     {
-        root["peers"][counter]["ip"] = peer->getIP();
-        root["peers"][counter]["port"] = (int)peer->getRemoteListeningPort();
-        root["peers"][counter]["ver"] = peer->getRemoteVersion();
-        root["peers"][counter]["olver"] = (int)peer->getRemoteOverlayVersion();
-        root["peers"][counter]["id"] =
-            mApp.getConfig().toStrKey(peer->getPeerID());
+        root["pending_peers"][counter]["address"] = peer->toString();
+
+        counter++;
+    }
+
+    root["authenticated_peers"];
+    counter = 0;
+    for (auto peer : mApp.getOverlayManager().getAuthenticatedPeers())
+    {
+        root["authenticated_peers"][counter]["address"] =
+            peer.second->toString();
+        root["authenticated_peers"][counter]["ver"] =
+            peer.second->getRemoteVersion();
+        root["authenticated_peers"][counter]["olver"] =
+            (int)peer.second->getRemoteOverlayVersion();
+        root["authenticated_peers"][counter]["id"] =
+            mApp.getConfig().toStrKey(peer.first);
 
         counter++;
     }
@@ -419,44 +474,9 @@ CommandHandler::peers(std::string const& params, std::string& retStr)
 }
 
 void
-CommandHandler::info(std::string const& params, std::string& retStr)
+CommandHandler::info(std::string const&, std::string& retStr)
 {
-    Json::Value root;
-
-    auto& lm = mApp.getLedgerManager();
-
-    auto& info = root["info"];
-
-    if (mApp.getConfig().UNSAFE_QUORUM)
-        info["UNSAFE_QUORUM"] = "UNSAFE QUORUM ALLOWED";
-    info["build"] = STELLAR_CORE_VERSION;
-    info["protocol_version"] = mApp.getConfig().LEDGER_PROTOCOL_VERSION;
-    info["state"] = mApp.getStateHuman();
-    info["ledger"]["num"] = (int)lm.getLedgerNum();
-    info["ledger"]["hash"] = binToHex(lm.getLastClosedLedgerHeader().hash);
-    info["ledger"]["closeTime"] =
-        (int)lm.getLastClosedLedgerHeader().header.scpValue.closeTime;
-    info["ledger"]["age"] = (int)lm.secondsSinceLastLedgerClose();
-    info["numPeers"] = (int)mApp.getOverlayManager().getPeers().size();
-    info["network"] = mApp.getConfig().NETWORK_PASSPHRASE;
-
-    auto& statusMessages = mApp.getStatusManager();
-    auto counter = 0;
-    for (auto statusMessage : statusMessages)
-    {
-        info["status"][counter++] = statusMessage.second;
-    }
-
-    auto& herder = mApp.getHerder();
-    Json::Value q;
-    herder.dumpQuorumInfo(q, mApp.getConfig().NODE_SEED.getPublicKey(), true,
-                          herder.getCurrentLedgerSeq());
-    if (q["slots"].size() != 0)
-    {
-        info["quorum"] = q["slots"];
-    }
-
-    retStr = root.toStyledString();
+    retStr = mApp.getJsonInfo().toStyledString();
 }
 
 void
@@ -494,23 +514,7 @@ CommandHandler::catchup(std::string const& params, std::string& retStr)
     std::map<std::string, std::string> retMap;
     http::server::server::parseParams(params, retMap);
 
-    uint32_t ledger = 0;
-    auto ledgerP = retMap.find("ledger");
-    if (ledgerP == retMap.end())
-    {
-        retStr = "Missing required parameter 'ledger=NNN'";
-        return;
-    }
-    else
-    {
-        std::stringstream str(ledgerP->second);
-        str >> ledger;
-        if (ledger == 0)
-        {
-            retStr = "Failed to parse ledger number";
-            return;
-        }
-    }
+    uint32_t ledger = parseNumParam<uint32_t>(retMap, "ledger");
 
     auto modeP = retMap.find("mode");
     if (modeP != retMap.end())
@@ -551,43 +555,6 @@ CommandHandler::checkdb(std::string const& params, std::string& retStr)
 }
 
 void
-CommandHandler::checkpoint(std::string const& params, std::string& retStr)
-{
-    auto& hm = mApp.getHistoryManager();
-    if (hm.hasAnyWritableHistoryArchive())
-    {
-        size_t initFail = hm.getPublishFailureCount();
-        size_t initDone = hm.getPublishSuccessCount() + initFail;
-        asio::error_code ec;
-        uint32_t lclNum = mApp.getLedgerManager().getLastClosedLedgerNum();
-        uint32_t ledgerNum = mApp.getLedgerManager().getLedgerNum();
-        hm.queueCurrentHistory();
-        size_t toPublish = hm.publishQueuedHistory();
-        while (((hm.getPublishSuccessCount() + hm.getPublishFailureCount()) -
-                initDone) != toPublish)
-        {
-            mApp.getClock().crank(false);
-        }
-        if (initFail != hm.getPublishFailureCount())
-        {
-            retStr = std::string("Publish failed");
-        }
-        else
-        {
-            retStr = fmt::format("Forcibly published checkpoint 0x{:08x}, "
-                                 "at current ledger {};\n"
-                                 "To force catch up on other peers, "
-                                 "issue the command 'catchup?ledger={}'",
-                                 lclNum, ledgerNum, ledgerNum);
-        }
-    }
-    else
-    {
-        retStr = "No writable history archives available";
-    }
-}
-
-void
 CommandHandler::connect(std::string const& params, std::string& retStr)
 {
     std::map<std::string, std::string> retMap;
@@ -623,13 +590,11 @@ CommandHandler::dropPeer(std::string const& params, std::string& retStr)
         NodeID n;
         if (mApp.getHerder().resolveNodeID(peerId->second, n))
         {
-            auto peers = mApp.getOverlayManager().getPeers();
-            auto peer = std::find_if(
-                peers.begin(), peers.end(),
-                [&n](Peer::pointer peer) { return peer->getPeerID() == n; });
+            auto peers = mApp.getOverlayManager().getAuthenticatedPeers();
+            auto peer = peers.find(n);
             if (peer != peers.end())
             {
-                mApp.getOverlayManager().dropPeer(*peer);
+                mApp.getOverlayManager().dropPeer(peer->second.get());
                 if (ban != retMap.end() && ban->second == "1")
                 {
                     retStr = "Drop and ban peer: ";
@@ -703,6 +668,63 @@ CommandHandler::unban(std::string const& params, std::string& retStr)
 }
 
 void
+CommandHandler::upgrades(std::string const& params, std::string& retStr)
+{
+    std::map<std::string, std::string> retMap;
+    http::server::server::parseParams(params, retMap);
+    auto s = retMap["mode"];
+    if (s.empty())
+    {
+        retStr = "mode required";
+        return;
+    }
+    if (s == "get")
+    {
+        retStr = mApp.getHerder().getUpgradesJson();
+    }
+    else if (s == "set")
+    {
+        Upgrades::UpgradeParameters p;
+
+        auto upgradeTime = retMap["upgradetime"];
+        std::tm tm;
+        try
+        {
+            tm = VirtualClock::isoStringToTm(upgradeTime);
+        }
+        catch (std::exception)
+        {
+            retStr =
+                fmt::format("could not parse upgradetime: '{}'", upgradeTime);
+            return;
+        }
+        p.mUpgradeTime = VirtualClock::tmToPoint(tm);
+
+        uint32 baseFee;
+        uint32 baseReserve;
+        uint32 maxTxSize;
+        uint32 protocolVersion;
+
+        p.mBaseFee = maybeParseNumParam(retMap, "basefee", baseFee);
+        p.mBaseReserve = maybeParseNumParam(retMap, "basereserve", baseReserve);
+        p.mMaxTxSize = maybeParseNumParam(retMap, "maxtxsize", maxTxSize);
+        p.mProtocolVersion =
+            maybeParseNumParam(retMap, "protocolversion", protocolVersion);
+
+        mApp.getHerder().setUpgrades(p);
+    }
+    else if (s == "clear")
+    {
+        Upgrades::UpgradeParameters p;
+        mApp.getHerder().setUpgrades(p);
+    }
+    else
+    {
+        retStr = fmt::format("Unknown mode: {}", s);
+    }
+}
+
+void
 CommandHandler::quorum(std::string const& params, std::string& retStr)
 {
     Json::Value root;
@@ -711,36 +733,23 @@ CommandHandler::quorum(std::string const& params, std::string& retStr)
 
     NodeID n;
 
-    try
-    {
-        std::string nID = retMap["node"];
+    std::string nID = retMap["node"];
 
-        if (nID.empty())
+    if (nID.empty())
+    {
+        n = mApp.getConfig().NODE_SEED.getPublicKey();
+    }
+    else
+    {
+        if (!mApp.getHerder().resolveNodeID(nID, n))
         {
-            n = mApp.getConfig().NODE_SEED.getPublicKey();
+            throw std::invalid_argument("unknown name");
         }
-        else
-        {
-            if (!mApp.getHerder().resolveNodeID(nID, n))
-            {
-                throw std::invalid_argument("unknown name");
-            }
-        }
+    }
 
-        mApp.getHerder().dumpQuorumInfo(root, n, retMap["compact"] == "true");
+    mApp.getHerder().dumpQuorumInfo(root, n, retMap["compact"] == "true");
 
-        retStr = root.toStyledString();
-    }
-    catch (std::exception& e)
-    {
-        retStr =
-            (fmt::MemoryWriter() << "{\"exception\": \"" << e.what() << "\"}")
-                .str();
-    }
-    catch (...)
-    {
-        retStr = "{\"exception\": \"generic\"}";
-    }
+    retStr = root.toStyledString();
 }
 
 void
@@ -752,15 +761,7 @@ CommandHandler::scpInfo(std::string const& params, std::string& retStr)
     http::server::server::parseParams(params, retMap);
 
     size_t lim = 2;
-    std::string limStr = retMap["limit"];
-    if (!limStr.empty())
-    {
-        size_t n = strtoul(limStr.c_str(), NULL, 0);
-        if (n != 0)
-        {
-            lim = n;
-        }
-    }
+    maybeParseNumParam(retMap, "limit", lim);
 
     mApp.getHerder().dumpInfo(root, lim);
 
@@ -828,61 +829,48 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
     if (params.compare(0, prefix.size(), prefix) == 0)
     {
         TransactionEnvelope envelope;
-        try
-        {
-            std::string blob = params.substr(prefix.size());
-            std::vector<uint8_t> binBlob;
-            bn::decode_b64(blob, binBlob);
+        std::string blob = params.substr(prefix.size());
+        std::vector<uint8_t> binBlob;
+        bn::decode_b64(blob, binBlob);
 
-            xdr::xdr_from_opaque(binBlob, envelope);
-            TransactionFramePtr transaction =
-                TransactionFrame::makeTransactionFromWire(mApp.getNetworkID(),
-                                                          envelope);
-            if (transaction)
+        xdr::xdr_from_opaque(binBlob, envelope);
+        TransactionFramePtr transaction =
+            TransactionFrame::makeTransactionFromWire(mApp.getNetworkID(),
+                                                      envelope);
+        if (transaction)
+        {
+            // add it to our current set
+            // and make sure it is valid
+            Herder::TransactionSubmitStatus status =
+                mApp.getHerder().recvTransaction(transaction);
+
+            if (status == Herder::TX_STATUS_PENDING)
             {
-                // add it to our current set
-                // and make sure it is valid
-                Herder::TransactionSubmitStatus status =
-                    mApp.getHerder().recvTransaction(transaction);
-
-                if (status == Herder::TX_STATUS_PENDING)
-                {
-                    StellarMessage msg;
-                    msg.type(TRANSACTION);
-                    msg.transaction() = envelope;
-                    mApp.getOverlayManager().broadcastMessage(msg);
-                }
-
-                output << "{"
-                       << "\"status\": "
-                       << "\"" << TX_STATUS_STRING[status] << "\"";
-                if (status == Herder::TX_STATUS_ERROR)
-                {
-                    std::string resultBase64;
-                    auto resultBin =
-                        xdr::xdr_to_opaque(transaction->getResult());
-                    resultBase64.reserve(bn::encoded_size64(resultBin.size()) +
-                                         1);
-                    resultBase64 = bn::encode_b64(resultBin);
-
-                    output << " , \"error\": \"" << resultBase64 << "\"";
-                }
-                output << "}";
+                StellarMessage msg;
+                msg.type(TRANSACTION);
+                msg.transaction() = envelope;
+                mApp.getOverlayManager().broadcastMessage(msg);
             }
-        }
-        catch (std::exception& e)
-        {
-            output << "{\"exception\": \"" << e.what() << "\"}";
-        }
-        catch (...)
-        {
-            output << "{\"exception\": \"generic\"}";
+
+            output << "{"
+                   << "\"status\": "
+                   << "\"" << TX_STATUS_STRING[status] << "\"";
+            if (status == Herder::TX_STATUS_ERROR)
+            {
+                std::string resultBase64;
+                auto resultBin = xdr::xdr_to_opaque(transaction->getResult());
+                resultBase64.reserve(bn::encoded_size64(resultBin.size()) + 1);
+                resultBase64 = bn::encode_b64(resultBin);
+
+                output << " , \"error\": \"" << resultBase64 << "\"";
+            }
+            output << "}";
         }
     }
     else
     {
-        output << "{\"exception\": \"Must specify a tx blob: tx?blob=<tx in "
-                  "xdr format>\"}";
+        throw std::invalid_argument("Must specify a tx blob: tx?blob=<tx in "
+                                    "xdr format>\"}");
     }
 
     retStr = output.str();
@@ -914,14 +902,7 @@ CommandHandler::setcursor(std::string const& params, std::string& retStr)
     http::server::server::parseParams(params, map);
     std::string const& id = map["id"];
 
-    uint32 cursor;
-
-    if (!parseNumParam(map, "cursor", cursor, retStr,
-                       Requirement::REQUIRED_REQ))
-    {
-        retStr = "Invalid cursor";
-        return;
-    }
+    uint32 cursor = parseNumParam<uint32>(map, "cursor");
 
     if (!ExternalQueue::validateResourceID(id))
     {
@@ -936,13 +917,44 @@ CommandHandler::setcursor(std::string const& params, std::string& retStr)
 }
 
 void
+CommandHandler::getcursor(std::string const& params, std::string& retStr)
+{
+    Json::Value root;
+    std::map<std::string, std::string> map;
+    http::server::server::parseParams(params, map);
+    std::string const& id = map["id"];
+
+    // the decision was made not to check validity here
+    // because there are subsequent checks for that in
+    // ExternalQueue and if an exception is thrown for
+    // validity there, the ret format is technically more
+    // correct for the mime type
+    ExternalQueue ps(mApp);
+    std::map<std::string, uint32> curMap;
+    int counter = 0;
+    ps.getCursorForResource(id, curMap);
+    root["cursors"][0];
+    for (auto cursor : curMap)
+    {
+        root["cursors"][counter]["id"] = cursor.first;
+        root["cursors"][counter]["cursor"] = cursor.second;
+        counter++;
+    }
+
+    retStr = root.toStyledString();
+}
+
+void
 CommandHandler::maintenance(std::string const& params, std::string& retStr)
 {
     std::map<std::string, std::string> map;
     http::server::server::parseParams(params, map);
     if (map["queue"] == "true")
     {
-        mApp.maintenance();
+        uint32_t count = 50000;
+        maybeParseNumParam(map, "count", count);
+
+        mApp.getMaintainer().performMaintenance(count);
         retStr = "Done";
     }
     else

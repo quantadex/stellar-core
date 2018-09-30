@@ -184,14 +184,15 @@ struct StateSnapshot;
 class HistoryManager
 {
   public:
-    static const uint32_t GENESIS_LEDGER_SEQ;
-
     // Status code returned from LedgerManager::verifyCatchupCandidate. Look
     // there for additional documentation.
-    enum VerifyHashStatus
+    enum LedgerVerificationStatus
     {
-        VERIFY_HASH_OK,
-        VERIFY_HASH_BAD
+        VERIFY_STATUS_OK,
+        VERIFY_STATUS_ERR_BAD_HASH,
+        VERIFY_STATUS_ERR_BAD_LEDGER_VERSION,
+        VERIFY_STATUS_ERR_OVERSHOT,
+        VERIFY_STATUS_ERR_MISSING_ENTRIES
     };
 
     // Select any readable history archive. If there are more than one,

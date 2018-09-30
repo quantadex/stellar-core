@@ -182,12 +182,12 @@ TEST_CASE("txresults", "[tx][txresults]")
     auto app = createTestApplication(clock, cfg);
     app->start();
 
-    LedgerDelta delta(app->getLedgerManager().getCurrentLedgerHeader(),
-                      app->getDatabase());
-
     auto validate = [&](TransactionFramePtr const& tx,
                         ValidationResult validationResult,
                         TransactionResult const& applyResult = {}) {
+        LedgerDelta delta(app->getLedgerManager().getCurrentLedgerHeader(),
+                          app->getDatabase());
+
         auto shouldValidateOk = validationResult.code == txSUCCESS;
         REQUIRE(tx->checkValid(*app, 0) == shouldValidateOk);
         REQUIRE(tx->getResult().result.code() == validationResult.code);
@@ -753,10 +753,10 @@ TEST_CASE("txresults", "[tx][txresults]")
 
         SECTION("with operation after")
         {
-            auto tx =
-                a.tx({payment(b, 1000), setOptions(nullptr, nullptr, nullptr,
-                                                   &th, nullptr, nullptr),
-                      payment(c, 1000)});
+            auto tx = a.tx(
+                {payment(b, 1000),
+                 setOptions(nullptr, nullptr, nullptr, &th, nullptr, nullptr),
+                 payment(c, 1000)});
 
             for_versions_to(6, *app, [&] {
                 validate(tx, {baseFee * 3, txSUCCESS},

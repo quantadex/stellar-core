@@ -96,21 +96,22 @@ simulateInflation(int ledgerVersion, int nbAccounts, int64& totCoins,
     }
 
     // sort by votes, then by ID in descending order
-    std::sort(votesV.begin(), votesV.end(), [](std::pair<int, int64> const& l,
-                                               std::pair<int, int64> const& r) {
-        if (l.second > r.second)
-        {
-            return true;
-        }
-        else if (l.second < r.second)
-        {
-            return false;
-        }
-        else
-        {
-            return l.first > r.first;
-        }
-    });
+    std::sort(
+        votesV.begin(), votesV.end(),
+        [](std::pair<int, int64> const& l, std::pair<int, int64> const& r) {
+            if (l.second > r.second)
+            {
+                return true;
+            }
+            else if (l.second < r.second)
+            {
+                return false;
+            }
+            else
+            {
+                return l.first > r.first;
+            }
+        });
 
     std::vector<int> winners;
     int64 totVotes = totCoins;
@@ -444,8 +445,8 @@ TEST_CASE("inflation", "[tx][inflation]")
     const int64 minVote = 1000000000LL;
     // .05% of all coins
     const int64 winnerVote =
-        bigDivide(app->getLedgerManager().getCurrentLedgerHeader().totalCoins, 5,
-                  10000, ROUND_DOWN);
+        bigDivide(app->getLedgerManager().getCurrentLedgerHeader().totalCoins,
+                  5, 10000, ROUND_DOWN);
 
     SECTION("inflation scenarios")
     {

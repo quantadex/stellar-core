@@ -51,6 +51,7 @@ class SCPDriver
     // the validity checks, kMaybeValidValue can be returned. This will cause
     // the current slot to be marked as a non validating slot: the local node
     // will abstain from emiting its position.
+    // validation can be *more* restrictive during nomination as needed
     enum ValidationLevel
     {
         kInvalidValue,        // value is invalid for sure
@@ -58,7 +59,7 @@ class SCPDriver
         kMaybeValidValue      // value may be valid
     };
     virtual ValidationLevel
-    validateValue(uint64 slotIndex, Value const& value)
+    validateValue(uint64 slotIndex, Value const& value, bool nomination)
     {
         return kMaybeValidValue;
     }
@@ -98,6 +99,7 @@ class SCPDriver
                                     std::set<Value> const& candidates) = 0;
 
     // `setupTimer`: requests to trigger 'cb' after timeout
+    // if cb is nullptr, the timer is cancelled
     virtual void setupTimer(uint64 slotIndex, int timerID,
                             std::chrono::milliseconds timeout,
                             std::function<void()> cb) = 0;

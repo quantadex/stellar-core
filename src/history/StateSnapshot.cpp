@@ -50,11 +50,12 @@ StateSnapshot::StateSnapshot(Application& app, HistoryArchiveState const& state)
 void
 StateSnapshot::makeLive()
 {
-    for (auto& hb : mLocalState.currentBuckets)
+    for (auto i = 0; i < mLocalState.currentBuckets.size(); i++)
     {
+        auto& hb = mLocalState.currentBuckets[i];
         if (hb.next.hasHashes() && !hb.next.isLive())
         {
-            hb.next.makeLive(mApp);
+            hb.next.makeLive(mApp, BucketList::keepDeadEntries(i));
         }
     }
 }
@@ -103,17 +104,17 @@ StateSnapshot::writeHistoryBlocks() const
             txResultOut);
         CLOG(DEBUG, "History") << "Wrote " << nHeaders << " ledger headers to "
                                << mLedgerSnapFile->localPath_nogz();
-        CLOG(DEBUG, "History") << "Wrote " << nTxs << " transactions to "
-                               << mTransactionSnapFile->localPath_nogz()
-                               << " and "
-                               << mTransactionResultSnapFile->localPath_nogz();
+        CLOG(DEBUG, "History")
+            << "Wrote " << nTxs << " transactions to "
+            << mTransactionSnapFile->localPath_nogz() << " and "
+            << mTransactionResultSnapFile->localPath_nogz();
 
         nbSCPMessages = HerderPersistence::copySCPHistoryToStream(
             mApp.getDatabase(), sess, begin, count, scpHistory);
 
-        CLOG(DEBUG, "History") << "Wrote " << nbSCPMessages
-                               << " SCP messages to "
-                               << mSCPHistorySnapFile->localPath_nogz();
+        CLOG(DEBUG, "History")
+            << "Wrote " << nbSCPMessages << " SCP messages to "
+            << mSCPHistorySnapFile->localPath_nogz();
     }
 
     if (nbSCPMessages == 0)

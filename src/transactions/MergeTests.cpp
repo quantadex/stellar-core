@@ -83,9 +83,9 @@ TEST_CASE("merge", "[tx][merge]")
                 txFrame->getResult().result.results()[2]);
 
             REQUIRE(result == ACCOUNT_MERGE_SUCCESS);
-            REQUIRE(b1.getBalance() ==
-                    2 * a1Balance + b1Balance - createBalance -
-                        2 * txFrame->getFee());
+            REQUIRE(b1.getBalance() == 2 * a1Balance + b1Balance -
+                                           createBalance -
+                                           2 * txFrame->getFee());
             REQUIRE(!loadAccount(a1, *app, false));
         });
 
@@ -373,6 +373,50 @@ TEST_CASE("merge", "[tx][merge]")
         });
     }
 
+    SECTION("create, merge, create")
+    {
+        auto c = getAccount("C");
+        auto d = getAccount("D");
+
+        REQUIRE(loadAccount(a1, *app));
+        REQUIRE(!loadAccount(c.getPublicKey(), *app, false));
+        REQUIRE(!loadAccount(d.getPublicKey(), *app, false));
+        auto a1Balance = a1.getBalance();
+
+        auto txFrame =
+            a1.tx({createAccount(c.getPublicKey(),
+                                 app->getLedgerManager().getMinBalance(0)),
+                   accountMerge(c.getPublicKey()),
+                   createAccount(d.getPublicKey(),
+                                 app->getLedgerManager().getMinBalance(0))});
+
+        for_versions_to(7, *app, [&] {
+            applyCheck(txFrame, *app);
+
+            REQUIRE(loadAccount(a1, *app));
+            REQUIRE(!loadAccount(c.getPublicKey(), *app, false));
+            REQUIRE(!loadAccount(d.getPublicKey(), *app, false));
+            REQUIRE(txFrame->getResultCode() == txINTERNAL_ERROR);
+
+            REQUIRE(a1Balance == a1.getBalance() + txFrame->getFee());
+        });
+
+        for_versions_from(8, *app, [&] {
+            applyCheck(txFrame, *app);
+
+            REQUIRE(loadAccount(a1, *app));
+            REQUIRE(!loadAccount(c.getPublicKey(), *app, false));
+            REQUIRE(!loadAccount(d.getPublicKey(), *app, false));
+            REQUIRE(txFrame->getResultCode() == txFAILED);
+
+            REQUIRE(a1Balance == a1.getBalance() + txFrame->getFee());
+            REQUIRE(txFrame->getResult().result.results()[0].code() == opINNER);
+            REQUIRE(txFrame->getResult().result.results()[1].code() == opINNER);
+            REQUIRE(txFrame->getResult().result.results()[2].code() ==
+                    opNO_ACCOUNT);
+        });
+    }
+
     SECTION("Account has static auth flag set")
     {
         for_all_versions(*app, [&] {
@@ -462,8 +506,9 @@ TEST_CASE("merge", "[tx][merge]")
                 REQUIRE(!AccountFrame::loadAccount(a1.getPublicKey(),
                                                    app->getDatabase()));
 
-                int64 expectedB1Balance = a1Balance + b1Balance -
-                                          2 * app->getLedgerManager().getTxFee();
+                int64 expectedB1Balance =
+                    a1Balance + b1Balance -
+                    2 * app->getLedgerManager().getTxFee();
                 REQUIRE(expectedB1Balance == b1.getBalance());
             });
         }
@@ -500,18 +545,22 @@ TEST_CASE("merge", "[tx][merge]")
     {
         auto mergeFrom = root.create(
             "merge-from", app->getLedgerManager().getMinBalance(0) + txfee);
-        for_all_versions(*app, [&] {
+        for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
+        for_versions_from(9, *app,
+                          [&] { REQUIRE_NOTHROW(mergeFrom.merge(root)); });
     }
 
     SECTION("account has only base reserve + one operation fee + one stroop")
     {
         auto mergeFrom = root.create(
             "merge-from", app->getLedgerManager().getMinBalance(0) + txfee + 1);
-        for_all_versions(*app, [&] {
+        for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
+        for_versions_from(9, *app,
+                          [&] { REQUIRE_NOTHROW(mergeFrom.merge(root)); });
     }
 
     SECTION("account has only base reserve + two operation fees - one stroop")
@@ -519,9 +568,11 @@ TEST_CASE("merge", "[tx][merge]")
         auto mergeFrom =
             root.create("merge-from", app->getLedgerManager().getMinBalance(0) +
                                           2 * txfee - 1);
-        for_all_versions(*app, [&] {
+        for_versions_to(8, *app, [&] {
             REQUIRE_THROWS_AS(mergeFrom.merge(root), ex_txINSUFFICIENT_BALANCE);
         });
+        for_versions_from(9, *app,
+                          [&] { REQUIRE_NOTHROW(mergeFrom.merge(root)); });
     }
 
     SECTION("account has only base reserve + two operation fees")

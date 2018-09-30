@@ -6,6 +6,7 @@
 
 #include "database/Database.h"
 #include "main/Config.h"
+#include "overlay/PeerBareAddress.h"
 #include "util/Timer.h"
 #include "util/optional.h"
 #include <string>
@@ -17,12 +18,12 @@ using namespace std;
 class PeerRecord
 {
   private:
-    std::string mIP;
-    unsigned short mPort;
+    PeerBareAddress mAddress;
+    bool mIsPreferred;
 
   public:
     VirtualClock::time_point mNextAttempt;
-    uint32_t mNumFailures;
+    int mNumFailures;
 
     /**
      * Create new PeerRecord object. If preconditions are not met - exception
@@ -31,20 +32,16 @@ class PeerRecord
      * @pre: !ip.empty()
      * @pre: port > 0
      */
-    PeerRecord(string const& ip, unsigned short port,
-               VirtualClock::time_point nextAttempt, uint32_t fails = 0);
+    PeerRecord(PeerBareAddress address, VirtualClock::time_point nextAttempt,
+               int fails = 0);
 
     bool
     operator==(PeerRecord& other)
     {
-        return mIP == other.mIP && mPort == other.mPort &&
+        return mAddress == other.mAddress &&
                mNextAttempt == other.mNextAttempt &&
                mNumFailures == other.mNumFailures;
     }
-
-    static PeerRecord
-    parseIPPort(std::string const& ipPort, Application& app,
-                unsigned short defaultPort = DEFAULT_PEER_PORT);
 
     /**
      * Load PeerRecord from database. If preconditions are not met - exception
@@ -52,25 +49,22 @@ class PeerRecord
      * If given PeerRecord is not found, nullopt is returned.
      * If @p ip is empty or @ip is set to 0 nullopt is returned.
      */
-    static optional<PeerRecord> loadPeerRecord(Database& db, std::string ip,
-                                               unsigned short port);
-    static void loadPeerRecords(Database& db, uint32_t max,
+    static optional<PeerRecord> loadPeerRecord(Database& db,
+                                               PeerBareAddress const& address);
+
+    // pred returns false if we should stop processing entries
+    static void loadPeerRecords(Database& db, int batchSize,
                                 VirtualClock::time_point nextAttemptCutoff,
-                                vector<PeerRecord>& retList);
-    const std::string&
-    ip() const
+                                std::function<bool(PeerRecord const& pr)> pred);
+
+    PeerBareAddress const&
+    getAddress() const
     {
-        return mIP;
-    };
-    unsigned short
-    port() const
-    {
-        return mPort;
+        return mAddress;
     };
 
-    bool isSelfAddressAndPort(std::string const& ip, unsigned short port) const;
-    bool isPrivateAddress() const;
-    bool isLocalhost() const;
+    void setPreferred(bool p);
+    bool isPreferred() const;
 
     // insert record in database if it's a new record
     // returns true if inserted
@@ -85,11 +79,14 @@ class PeerRecord
     void toXdr(PeerAddress& ret) const;
 
     static void dropAll(Database& db);
-    std::string toString();
+    std::string toString() const;
 
   private:
+    // peerRecordProcessor returns false if we should stop processing entries
+    static void
+    loadPeerRecords(Database& db, StatementContext& prep,
+                    std::function<bool(PeerRecord const&)> peerRecordProcessor);
     std::chrono::seconds computeBackoff(VirtualClock& clock);
-    static void ipToXdr(std::string ip, xdr::opaque_array<4U>& ret);
     static const char* kSQLCreateStatement;
 };
 }

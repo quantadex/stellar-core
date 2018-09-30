@@ -6,7 +6,7 @@ stellar-core can be controlled via the following commands.
 
 ## Command line options
 * **--?** or **--help**: Print the available command line options and then exit..
-* **--c** Send an [HTTP command](#HTTP-Commands) to an already running local instance of stellar-core and then exit. For example: 
+* **--c** Send an [HTTP command](#http-commands) to an already running local instance of stellar-core and then exit. For example: 
 
 `$ stellar-core -c info`
 
@@ -125,6 +125,10 @@ debugging purpose).
   The actual deletion is performed by invoking the `maintenance` endpoint or on startup.
   See also `dropcursor`.
 
+* **getcursor**
+ `/getcursor?[id=ID]`<br>
+ gets the cursor identified by `ID`. If ID is not defined then all cursors will be returned.
+
 * **scp**
   `/scp?[limit=n]
   Returns a JSON object with the internal state of the SCP engine for the last n (default 2) ledgers.
@@ -132,7 +136,7 @@ debugging purpose).
 * **tx**
   `/tx?blob=Base64`<br>
   submit a [transaction](../../learn/concepts/transactions.md) to the network.
-  blob is a base64 encoded XDR serialized 'TransactionEnvelope'
+  blob is a base64 encoded XDR serialized 'TransactionEnvelope', and it
   returns a JSON object with the following properties
   status:
     * "PENDING" - transaction is being considered by consensus
@@ -140,6 +144,27 @@ debugging purpose).
     * "ERROR" - transaction rejected by transaction engine
         error: set when status is "ERROR".
             Base64 encoded, XDR serialized 'TransactionResult'
+
+* **upgrades**
+  * `/upgrades?mode=get`<br>
+  retrieves the currently configured upgrade settings<br>
+  * `/upgrades?mode=clear`<br>
+  clears any upgrade settings<br>
+  * `/upgrades?mode=set&upgradetime=DATETIME&[basefee=NUM]&[basereserve=NUM]&[maxtxsize=NUM]&[protocolversion=NUM]`<br>
+  upgradetime is a required date (UTC) in the form 1970-01-01T00:00:00Z.<br>
+    * fee (uint32) This is what you would prefer the base fee to be. It is
+        in stroops<br>
+    * basereserve (uint32) This is what you would prefer the base reserve 
+        to be. It is in stroops.<br>
+    * maxtxsize (uint32) This defines the maximum number of transactions 
+        to include in a ledger. When too many transactions are pending, 
+        surge pricing is applied. The instance picks the top maxtxsize
+         transactions locally to be considered in the next ledger. Where 
+        transactions are ordered by transaction fee(lower fee transactions
+         are held for later).<br>
+    * protocolversion (uint32) defines the protocol version to upgrade to.
+         When specified it must match the protocol version supported by the
+        node<br>
 
 ### The following HTTP commands are exposed on test instances
 * **generateload**

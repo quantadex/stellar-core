@@ -92,6 +92,7 @@ class VirtualClock
     static std::tm pointToTm(time_point);
     static VirtualClock::time_point tmToPoint(tm t);
 
+    static std::tm isoStringToTm(std::string const& iso);
     static std::string tmToISOString(std::tm const& tm);
     static std::string pointToISOString(time_point point);
 
@@ -121,7 +122,6 @@ class VirtualClock
 
     bool mDestructing{false};
 
-    time_point next();
     void maybeSetRealtimer();
     size_t advanceTo(time_point n);
     size_t advanceToNext();
@@ -138,6 +138,7 @@ class VirtualClock
     size_t crank(bool block = true);
     void noteCrankOccurred(bool hadIdle);
     uint32_t recentIdleCrankPercent() const;
+    void resetIdleCrankPercent();
     asio::io_service& getIOService();
 
     // Note: this is not a static method, which means that VirtualClock is
@@ -152,6 +153,9 @@ class VirtualClock
     // only valid with VIRTUAL_TIME: sets the current value
     // of the clock
     void setCurrentTime(time_point t);
+
+    // returns the time of the next scheduled event
+    time_point next();
 };
 
 class VirtualClockEvent : public NonMovableOrCopyable

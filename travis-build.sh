@@ -24,6 +24,7 @@ ln -s `which gcc-4.9` bin/gcc
 ln -s `which g++-4.9` bin/g++
 ln -s `which clang-3.5` bin/clang
 ln -s `which clang++-3.5` bin/clang++
+ln -s `which llvm-symbolizer-3.5` bin/llvm-symbolizer
 
 export PATH=`pwd`/bin:$PATH
 hash -r
@@ -63,6 +64,16 @@ echo "committer = $committer, config_flags = $config_flags"
 ccache -s
 ./autogen.sh
 ./configure $config_flags
+make format
+d=`git diff | wc -l`
+if [ $d -ne 0 ]
+then
+    echo "clang format must be run as part of the pull request, current diff:"
+    git diff
+    exit 1
+fi
 make -j3
 ccache -s
+export ALL_VERSIONS=1
 make check
+

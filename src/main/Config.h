@@ -7,6 +7,7 @@
 #include "lib/util/cpptoml.h"
 #include "overlay/StellarXDR.h"
 #include "util/SecretValue.h"
+#include "util/Timer.h"
 #include "util/optional.h"
 #include <map>
 #include <memory>
@@ -31,7 +32,7 @@ class Config : public std::enable_shared_from_this<Config>
     std::string expandNodeID(std::string const& s) const;
 
   public:
-    static const int CURRENT_LEDGER_PROTOCOL_VERSION = 8;
+    static const uint32 CURRENT_LEDGER_PROTOCOL_VERSION;
 
     typedef std::shared_ptr<Config> pointer;
 
@@ -77,8 +78,12 @@ class Config : public std::enable_shared_from_this<Config>
     // If you want, say, a week of history, set this to 120000.
     uint32_t CATCHUP_RECENT;
 
-    // Enables or disables automatic maintenance on startup
-    bool MAINTENANCE_ON_STARTUP;
+    // Interval between automatic maintenance executions
+    std::chrono::seconds AUTOMATIC_MAINTENANCE_PERIOD;
+
+    // Number of unneeded rows in each table that will be removed during one
+    // maintenance run
+    uint32_t AUTOMATIC_MAINTENANCE_COUNT;
 
     // A config parameter that enables synthetic load generation on demand,
     // using the `generateload` runtime command (see CommandHandler.cpp). This
@@ -105,6 +110,10 @@ class Config : public std::enable_shared_from_this<Config>
     // this should only be enabled when testing as it's a security issue
     bool ALLOW_LOCALHOST_FOR_TESTING;
 
+    // Set to use config file values for genesis ledger
+    // not setable in config file - only tests are allowed to do this
+    bool USE_CONFIG_FOR_GENESIS;
+
     // This is the number of failures you want to be able to tolerate.
     // You will need at least 3f+1 nodes in your quorum set.
     // If you don't have enough in your quorum set to tolerate the level you
@@ -117,8 +126,11 @@ class Config : public std::enable_shared_from_this<Config>
     //  aren't concerned with byzantine failures.
     bool UNSAFE_QUORUM;
 
+    // Set of cursors added at each startup with value '1'.
+    std::vector<std::string> KNOWN_CURSORS;
+
     uint32_t LEDGER_PROTOCOL_VERSION;
-    optional<std::tm> PREFERRED_UPGRADE_DATETIME;
+    VirtualClock::time_point TESTING_UPGRADE_DATETIME;
 
     // note: all versions in the range
     // [OVERLAY_PROTOCOL_MIN_VERSION, OVERLAY_PROTOCOL_VERSION] must be handled
@@ -127,9 +139,9 @@ class Config : public std::enable_shared_from_this<Config>
     std::string VERSION_STR;
     std::string LOG_FILE_PATH;
     std::string BUCKET_DIR_PATH;
-    uint32_t DESIRED_BASE_FEE;     // in stroops
-    uint32_t DESIRED_BASE_RESERVE; // in stroops
-    uint32_t DESIRED_MAX_TX_PER_LEDGER;
+    uint32_t TESTING_UPGRADE_DESIRED_FEE; // in stroops
+    uint32_t TESTING_UPGRADE_RESERVE;     // in stroops
+    uint32_t TESTING_UPGRADE_MAX_TX_PER_LEDGER;
     unsigned short HTTP_PORT; // what port to listen for commands
     bool PUBLIC_HTTP_PORT;    // if you accept commands from not localhost
     int HTTP_MAX_CLIENT;      // maximum number of http clients, i.e backlog
@@ -137,8 +149,13 @@ class Config : public std::enable_shared_from_this<Config>
 
     // overlay config
     unsigned short PEER_PORT;
-    unsigned TARGET_PEER_CONNECTIONS;
-    unsigned MAX_PEER_CONNECTIONS;
+    unsigned short TARGET_PEER_CONNECTIONS;
+    int MAX_ADDITIONAL_PEER_CONNECTIONS;
+    unsigned short MAX_PEER_CONNECTIONS;
+    unsigned short MAX_PENDING_CONNECTIONS;
+    unsigned short PEER_AUTHENTICATION_TIMEOUT;
+    unsigned short PEER_TIMEOUT;
+
     // Peers we will always try to stay connected to
     std::vector<std::string> PREFERRED_PEERS;
     std::vector<std::string> KNOWN_PEERS;

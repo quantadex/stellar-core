@@ -7,6 +7,7 @@
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
 #include <chrono>
+#include <cstdio>
 #include <thread>
 
 namespace stellar
@@ -16,12 +17,9 @@ using namespace std;
 
 static const uint32_t RECENT_CRANK_WINDOW = 1024;
 
-VirtualClock::VirtualClock(Mode mode)
-    : mRealTimer(mIOService)
-    , mMode(mode)
-    , mRecentCrankCount(RECENT_CRANK_WINDOW >> 1)
-    , mRecentIdleCrankCount(RECENT_CRANK_WINDOW >> 1)
+VirtualClock::VirtualClock(Mode mode) : mRealTimer(mIOService), mMode(mode)
 {
+    resetIdleCrankPercent();
     if (mMode == REAL_TIME)
     {
         mNow = std::chrono::system_clock::now();
@@ -129,6 +127,28 @@ VirtualClock::tmToPoint(tm t)
 {
     time_t tt = timegm(&t);
     return VirtualClock::time_point() + std::chrono::seconds(tt);
+}
+
+std::tm
+VirtualClock::isoStringToTm(std::string const& iso)
+{
+    std::tm res;
+    int y, M, d, h, m, s;
+    if (std::sscanf(iso.c_str(), "%d-%d-%dT%d:%d:%dZ", &y, &M, &d, &h, &m,
+                    &s) != 6)
+    {
+        throw std::invalid_argument("Could not parse iso date");
+    }
+    res.tm_year = y - 1900;
+    res.tm_mon = M - 1;
+    res.tm_mday = d;
+    res.tm_hour = h;
+    res.tm_min = m;
+    res.tm_sec = s;
+    res.tm_isdst = 0;
+    res.tm_wday = 0;
+    res.tm_yday = 0;
+    return res;
 }
 
 std::string
@@ -324,6 +344,13 @@ VirtualClock::recentIdleCrankPercent() const
     assert(v <= 100);
 
     return v;
+}
+
+void
+VirtualClock::resetIdleCrankPercent()
+{
+    mRecentCrankCount = RECENT_CRANK_WINDOW >> 1;
+    mRecentIdleCrankCount = RECENT_CRANK_WINDOW >> 1;
 }
 
 asio::io_service&

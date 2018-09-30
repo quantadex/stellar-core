@@ -21,6 +21,7 @@ class prepare_temp_type;
 namespace stellar
 {
 class LedgerManager;
+class LedgerRange;
 
 class AccountFrame : public EntryFrame
 {
@@ -30,8 +31,6 @@ class AccountFrame : public EntryFrame
     AccountEntry& mAccountEntry;
 
     void normalize();
-
-    bool isValid();
 
     static std::vector<Signer> loadSigners(Database& db,
                                            std::string const& actIDStrKey);
@@ -121,6 +120,10 @@ class AccountFrame : public EntryFrame
                             LedgerKey const& key);
     static bool exists(Database& db, LedgerKey const& key);
     static uint64_t countObjects(soci::session& sess);
+    static uint64_t countObjects(soci::session& sess,
+                                 LedgerRange const& ledgers);
+    static void deleteAccountsModifiedOnOrAfterLedger(Database& db,
+                                                      uint32_t oldestLedger);
 
     // database utilities
     static AccountFrame::pointer

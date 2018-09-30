@@ -16,6 +16,7 @@
 #include "util/types.h"
 #include <fstream>
 #include <map>
+#include <regex>
 #include <set>
 
 #include "medida/counter.h"
@@ -70,10 +71,26 @@ BucketManagerImpl::BucketManagerImpl(Application& app)
 
 const std::string BucketManagerImpl::kLockFilename = "stellar-core.lock";
 
-static std::string
+namespace
+{
+std::string
 bucketBasename(std::string const& bucketHexHash)
 {
     return "bucket-" + bucketHexHash + ".xdr";
+}
+
+bool
+isBucketFile(std::string const& name)
+{
+    static std::regex re("^bucket-[a-z0-9]{64}\\.xdr(\\.gz)?$");
+    return std::regex_match(name, re);
+};
+
+uint256
+extractFromFilename(std::string const& name)
+{
+    return hexToBin256(name.substr(7, 64));
+};
 }
 
 std::string
@@ -110,12 +127,11 @@ BucketManagerImpl::getBucketDir()
 
         std::string lock = d + "/" + kLockFilename;
 
-        if (!fs::lockFile(lock))
-        {
-            std::string msg("Found existing lockfile '" + lock +
-                            "' that is already locked.");
-            throw std::runtime_error(msg);
-        }
+        // there are many reasons the lock can fail so let lockFile throw
+        // directly for more clear error messages since we end up just raising
+        // a runtime exception anyway
+        fs::lockFile(lock);
+
         mLockedBucketDir = make_unique<std::string>(d);
     }
     return *(mLockedBucketDir);
@@ -163,8 +179,8 @@ BucketManagerImpl::adoptFileAsBucket(std::string const& filename,
         mBucketObjectInsert.Mark(nObjects);
         mBucketByteInsert.Mark(nBytes);
         std::string canonicalName = bucketFilename(hash);
-        CLOG(DEBUG, "Bucket") << "Adopting bucket file " << filename << " as "
-                              << canonicalName;
+        CLOG(DEBUG, "Bucket")
+            << "Adopting bucket file " << filename << " as " << canonicalName;
         if (rename(filename.c_str(), canonicalName.c_str()) != 0)
         {
             std::string err("Failed to rename bucket :");
@@ -193,17 +209,17 @@ BucketManagerImpl::getBucketByHash(uint256 const& hash)
     auto i = mSharedBuckets.find(hash);
     if (i != mSharedBuckets.end())
     {
-        CLOG(TRACE, "Bucket") << "BucketManager::getBucketByHash("
-                              << binToHex(hash) << ") found bucket "
-                              << i->second->getFilename();
+        CLOG(TRACE, "Bucket")
+            << "BucketManager::getBucketByHash(" << binToHex(hash)
+            << ") found bucket " << i->second->getFilename();
         return i->second;
     }
     std::string canonicalName = bucketFilename(hash);
     if (fs::exists(canonicalName))
     {
-        CLOG(TRACE, "Bucket") << "BucketManager::getBucketByHash("
-                              << binToHex(hash)
-                              << ") found no bucket, making new one";
+        CLOG(TRACE, "Bucket")
+            << "BucketManager::getBucketByHash(" << binToHex(hash)
+            << ") found no bucket, making new one";
         auto p = std::make_shared<Bucket>(canonicalName, hash);
         mSharedBuckets.insert(std::make_pair(hash, p));
         mSharedBucketsSize.set_count(mSharedBuckets.size());
@@ -212,13 +228,11 @@ BucketManagerImpl::getBucketByHash(uint256 const& hash)
     return std::shared_ptr<Bucket>();
 }
 
-void
-BucketManagerImpl::forgetUnreferencedBuckets()
+std::set<Hash>
+BucketManagerImpl::getReferencedBuckets() const
 {
-
-    std::lock_guard<std::recursive_mutex> lock(mBucketMutex);
-    std::set<Hash> referenced;
-    for (size_t i = 0; i < BucketList::kNumLevels; ++i)
+    auto referenced = std::set<Hash>{};
+    for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
         auto const& level = mBucketList.getLevel(i);
         referenced.insert(level.getCurr()->getHash());
@@ -242,6 +256,40 @@ BucketManagerImpl::forgetUnreferencedBuckets()
         }
     }
 
+    return referenced;
+}
+
+void
+BucketManagerImpl::cleanupStaleFiles()
+{
+    std::lock_guard<std::recursive_mutex> lock(mBucketMutex);
+    auto referenced = getReferencedBuckets();
+    std::transform(std::begin(mSharedBuckets), std::end(mSharedBuckets),
+                   std::inserter(referenced, std::end(referenced)),
+                   [](std::pair<Hash, std::shared_ptr<Bucket>> const& p) {
+                       return p.first;
+                   });
+
+    for (auto f : fs::findfiles(getBucketDir(), isBucketFile))
+    {
+        auto hash = extractFromFilename(f);
+        if (referenced.find(hash) == std::end(referenced))
+        {
+            // we don't care about failure here
+            // if removing file failed one time, it may not fail when this is
+            // called again
+            auto fullName = getBucketDir() + "/" + f;
+            std::remove(fullName.c_str());
+        }
+    }
+}
+
+void
+BucketManagerImpl::forgetUnreferencedBuckets()
+{
+    std::lock_guard<std::recursive_mutex> lock(mBucketMutex);
+    auto referenced = getReferencedBuckets();
+
     for (auto i = mSharedBuckets.begin(); i != mSharedBuckets.end();)
     {
         // Standard says map iterators other than the one you're erasing remain
@@ -262,15 +310,18 @@ BucketManagerImpl::forgetUnreferencedBuckets()
         if (referenced.find(j->first) == referenced.end() &&
             j->second.use_count() == 1)
         {
+            auto filename = j->second->getFilename();
             CLOG(TRACE, "Bucket")
                 << "BucketManager::forgetUnreferencedBuckets dropping "
-                << j->second->getFilename();
-            j->second->setRetain(false);
+                << filename;
+            if (!filename.empty())
+            {
+                CLOG(TRACE, "Bucket") << "removing bucket file: " << filename;
+                std::remove(filename.c_str());
+                auto gzfilename = filename + ".gz";
+                std::remove(gzfilename.c_str());
+            }
             mSharedBuckets.erase(j);
-        }
-        else
-        {
-            j->second->setRetain(true);
         }
     }
     mSharedBucketsSize.set_count(mSharedBuckets.size());
@@ -337,7 +388,7 @@ BucketManagerImpl::checkForMissingBucketsFiles(HistoryArchiveState const& has)
 void
 BucketManagerImpl::assumeState(HistoryArchiveState const& has)
 {
-    for (size_t i = 0; i < BucketList::kNumLevels; ++i)
+    for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
         auto curr = getBucketByHash(hexToBin256(has.currentBuckets.at(i).curr));
         auto snap = getBucketByHash(hexToBin256(has.currentBuckets.at(i).snap));
@@ -350,7 +401,9 @@ BucketManagerImpl::assumeState(HistoryArchiveState const& has)
         mBucketList.getLevel(i).setSnap(snap);
         mBucketList.getLevel(i).setNext(has.currentBuckets.at(i).next);
     }
-    mBucketList.restartMerges(mApp, has.currentLedger);
+
+    mBucketList.restartMerges(mApp);
+    cleanupStaleFiles();
 }
 
 void

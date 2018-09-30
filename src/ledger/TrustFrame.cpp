@@ -8,6 +8,7 @@
 #include "crypto/SHA.h"
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
+#include "ledger/LedgerRange.h"
 #include "util/types.h"
 
 using namespace std;
@@ -42,7 +43,6 @@ TrustFrame::TrustFrame()
 TrustFrame::TrustFrame(LedgerEntry const& from)
     : EntryFrame(from), mTrustLine(mEntry.data.trustLine()), mIsIssuer(false)
 {
-    assert(isValid());
 }
 
 TrustFrame::TrustFrame(TrustFrame const& from) : TrustFrame(from.mEntry)
@@ -88,7 +88,6 @@ TrustFrame::getKeyFields(LedgerKey const& key, std::string& actIDStrKey,
 int64_t
 TrustFrame::getBalance() const
 {
-    assert(isValid());
     return mTrustLine.balance;
 }
 
@@ -141,27 +140,6 @@ TrustFrame::getMaxAmountReceive() const
 }
 
 bool
-TrustFrame::isValid(LedgerEntry const& le)
-{
-    bool res = (le.lastModifiedLedgerSeq <= INT32_MAX);
-    TrustLineEntry const& tl = le.data.trustLine();
-
-    res = res && (tl.asset.type() != ASSET_TYPE_NATIVE);
-    res = res && isAssetValid(tl.asset);
-    res = res && (tl.balance >= 0);
-    res = res && (tl.limit > 0);
-    res = res && (tl.balance <= tl.limit);
-    res = res && ((tl.flags & ~MASK_TRUSTLINE_FLAGS) == 0);
-    return res;
-}
-
-bool
-TrustFrame::isValid() const
-{
-    return isValid(mEntry);
-}
-
-bool
 TrustFrame::exists(Database& db, LedgerKey const& key)
 {
     if (cachedEntryExists(key, db) && getCachedEntry(key, db) != nullptr)
@@ -194,6 +172,36 @@ TrustFrame::countObjects(soci::session& sess)
     return count;
 }
 
+uint64_t
+TrustFrame::countObjects(soci::session& sess, LedgerRange const& ledgers)
+{
+    uint64_t count = 0;
+    sess << "SELECT COUNT(*) FROM trustlines"
+            " WHERE lastmodified >= :v1 AND lastmodified <= :v2;",
+        into(count), use(ledgers.first()), use(ledgers.last());
+    return count;
+}
+
+void
+TrustFrame::deleteTrustLinesModifiedOnOrAfterLedger(Database& db,
+                                                    uint32_t oldestLedger)
+{
+    db.getEntryCache().erase_if(
+        [oldestLedger](std::shared_ptr<LedgerEntry const> le) -> bool {
+            return le && le->data.type() == TRUSTLINE &&
+                   le->lastModifiedLedgerSeq >= oldestLedger;
+        });
+
+    {
+        auto prep = db.getPreparedStatement(
+            "DELETE FROM trustlines WHERE lastmodified >= :v1");
+        auto& st = prep.statement();
+        st.exchange(soci::use(oldestLedger));
+        st.define_and_bind();
+        st.execute(true);
+    }
+}
+
 void
 TrustFrame::storeDelete(LedgerDelta& delta, Database& db) const
 {
@@ -219,11 +227,6 @@ TrustFrame::storeDelete(LedgerDelta& delta, Database& db, LedgerKey const& key)
 void
 TrustFrame::storeChange(LedgerDelta& delta, Database& db)
 {
-    if (!isValid())
-    {
-        throw std::runtime_error("Invalid TrustEntry");
-    }
-
     auto key = getKey();
     flushCachedEntry(key, db);
 
@@ -263,11 +266,6 @@ TrustFrame::storeChange(LedgerDelta& delta, Database& db)
 void
 TrustFrame::storeAdd(LedgerDelta& delta, Database& db)
 {
-    if (!isValid())
-    {
-        throw std::runtime_error("Invalid TrustEntry");
-    }
-
     auto key = getKey();
     flushCachedEntry(key, db);
 
@@ -460,11 +458,6 @@ TrustFrame::loadLines(StatementContext& prep,
             tl.asset.alphaNum12().issuer =
                 KeyUtils::fromStrKey<PublicKey>(issuerStrKey);
             strToAssetCode(tl.asset.alphaNum12().assetCode, assetCode);
-        }
-
-        if (!isValid(le))
-        {
-            throw std::runtime_error("Invalid TrustEntry");
         }
 
         trustProcessor(le);

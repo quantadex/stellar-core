@@ -7,7 +7,6 @@
 // else.
 #include "util/asio.h"
 #include "history/HistoryArchive.h"
-#include "StellarCoreVersion.h"
 #include "bucket/Bucket.h"
 #include "bucket/BucketList.h"
 #include "crypto/Hex.h"
@@ -15,6 +14,7 @@
 #include "history/HistoryManager.h"
 #include "lib/util/format.h"
 #include "main/Application.h"
+#include "main/StellarCoreVersion.h"
 #include "process/ProcessManager.h"
 #include "util/Fs.h"
 #include "util/Logging.h"
@@ -116,8 +116,8 @@ HistoryArchiveState::load(std::string const& inFile)
     serialize(ar);
     if (version != HISTORY_ARCHIVE_STATE_VERSION)
     {
-        CLOG(ERROR, "History") << "unexpected history archive state version: "
-                               << version;
+        CLOG(ERROR, "History")
+            << "unexpected history archive state version: " << version;
         throw std::runtime_error("unexpected history archive state version");
     }
     assert(futuresAllResolved());
@@ -267,7 +267,7 @@ HistoryArchiveState::HistoryArchiveState(uint32_t ledgerSeq,
                                          BucketList& buckets)
     : server(STELLAR_CORE_VERSION), currentLedger(ledgerSeq)
 {
-    for (size_t i = 0; i < BucketList::kNumLevels; ++i)
+    for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
         HistoryStateBucket b;
         auto& level = buckets.getLevel(i);

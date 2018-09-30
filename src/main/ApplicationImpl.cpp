@@ -17,14 +17,19 @@
 #include "herder/Herder.h"
 #include "herder/HerderPersistence.h"
 #include "history/HistoryManager.h"
+#include "invariant/AccountSubEntriesCountIsValid.h"
+#include "invariant/BucketListIsConsistentWithDatabase.h"
 #include "invariant/CacheIsConsistentWithDatabase.h"
-#include "invariant/ChangedAccountsSubentriesCountIsValid.h"
+#include "invariant/ConservationOfLumens.h"
 #include "invariant/InvariantManager.h"
-#include "invariant/TotalCoinsEqualsBalancesPlusFeePool.h"
+#include "invariant/LedgerEntryIsValid.h"
+#include "invariant/MinimumAccountBalance.h"
 #include "ledger/LedgerManager.h"
 #include "main/CommandHandler.h"
 #include "main/ExternalQueue.h"
+#include "main/Maintainer.h"
 #include "main/NtpSynchronizationChecker.h"
+#include "main/StellarCoreVersion.h"
 #include "medida/counter.h"
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
@@ -64,6 +69,7 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     , mAppStateCurrent(mMetrics->NewCounter({"app", "state", "current"}))
     , mAppStateChanges(mMetrics->NewTimer({"app", "state", "changes"}))
     , mLastStateChange(clock.now())
+    , mStartedOn(clock.now())
 {
 #ifdef SIGQUIT
     mStopSignals.add(SIGQUIT);
@@ -87,40 +93,47 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
         }
     });
 
-    // These must be constructed _after_ because they frequently call back
-    // into App.getFoo() to get information / start up.
+    while (t--)
+    {
+        mWorkerThreads.emplace_back([this, t]() { this->runWorkerThread(t); });
+    }
+}
+
+void
+ApplicationImpl::initialize()
+{
     mDatabase = make_unique<Database>(*this);
     mPersistentState = make_unique<PersistentState>(*this);
-
-    mTmpDirManager = make_unique<TmpDirManager>(cfg.BUCKET_DIR_PATH + "/tmp");
-    mOverlayManager = OverlayManager::create(*this);
+    mTmpDirManager =
+        make_unique<TmpDirManager>(mConfig.BUCKET_DIR_PATH + "/tmp");
+    mOverlayManager = createOverlayManager();
     mLedgerManager = LedgerManager::create(*this);
-    mHerder = Herder::create(*this);
+    mHerder = createHerder();
     mHerderPersistence = HerderPersistence::create(*this);
     mBucketManager = BucketManager::create(*this);
     mCatchupManager = CatchupManager::create(*this);
     mHistoryManager = HistoryManager::create(*this);
-    mInvariantManager = InvariantManager::create(*this);
+    mInvariantManager = createInvariantManager();
+    mMaintainer = make_unique<Maintainer>(*this);
     mProcessManager = ProcessManager::create(*this);
     mCommandHandler = make_unique<CommandHandler>(*this);
     mWorkManager = WorkManager::create(*this);
     mBanManager = BanManager::create(*this);
     mStatusManager = make_unique<StatusManager>();
 
+    BucketListIsConsistentWithDatabase::registerInvariant(*this);
+    AccountSubEntriesCountIsValid::registerInvariant(*this);
     CacheIsConsistentWithDatabase::registerInvariant(*this);
-    ChangedAccountsSubentriesCountIsValid::registerInvariant(*this);
-    TotalCoinsEqualsBalancesPlusFeePool::registerInvariant(*this);
+    ConservationOfLumens::registerInvariant(*this);
+    LedgerEntryIsValid::registerInvariant(*this);
+    MinimumAccountBalance::registerInvariant(*this);
     enableInvariantsFromConfig();
 
-    if (!cfg.NTP_SERVER.empty())
+    if (!mConfig.NTP_SERVER.empty())
     {
         mNtpSynchronizationChecker =
-            std::make_shared<NtpSynchronizationChecker>(*this, cfg.NTP_SERVER);
-    }
-
-    while (t--)
-    {
-        mWorkerThreads.emplace_back([this, t]() { this->runWorkerThread(t); });
+            std::make_shared<NtpSynchronizationChecker>(*this,
+                                                        mConfig.NTP_SERVER);
     }
 
     LOG(DEBUG) << "Application constructed";
@@ -200,11 +213,64 @@ ApplicationImpl::reportCfgMetrics()
     }
 }
 
+Json::Value
+ApplicationImpl::getJsonInfo()
+{
+    auto root = Json::Value{};
+
+    auto& lm = getLedgerManager();
+
+    auto& info = root["info"];
+
+    if (getConfig().UNSAFE_QUORUM)
+        info["UNSAFE_QUORUM"] = "UNSAFE QUORUM ALLOWED";
+    info["build"] = STELLAR_CORE_VERSION;
+    info["protocol_version"] = getConfig().LEDGER_PROTOCOL_VERSION;
+    info["state"] = getStateHuman();
+    info["startedOn"] = VirtualClock::pointToISOString(mStartedOn);
+    info["ledger"]["num"] = (int)lm.getLedgerNum();
+    auto const& lcl = lm.getLastClosedLedgerHeader();
+    info["ledger"]["hash"] = binToHex(lcl.hash);
+    info["ledger"]["closeTime"] = (Json::UInt64)lcl.header.scpValue.closeTime;
+    info["ledger"]["version"] = lcl.header.ledgerVersion;
+    info["ledger"]["baseFee"] = lcl.header.baseFee;
+    info["ledger"]["baseReserve"] = lcl.header.baseReserve;
+    info["ledger"]["age"] = (int)lm.secondsSinceLastLedgerClose();
+    info["peers"]["pending_count"] = getOverlayManager().getPendingPeersCount();
+    info["peers"]["authenticated_count"] =
+        getOverlayManager().getAuthenticatedPeersCount();
+    info["network"] = getConfig().NETWORK_PASSPHRASE;
+
+    auto& statusMessages = getStatusManager();
+    auto counter = 0;
+    for (auto statusMessage : statusMessages)
+    {
+        info["status"][counter++] = statusMessage.second;
+    }
+
+    auto& herder = getHerder();
+    Json::Value q;
+    herder.dumpQuorumInfo(q, getConfig().NODE_SEED.getPublicKey(), true,
+                          herder.getCurrentLedgerSeq());
+    if (q["slots"].size() != 0)
+    {
+        info["quorum"] = q["slots"];
+    }
+
+    Json::Value invariantFailures = getInvariantManager().getInformation();
+    if (!invariantFailures.empty())
+    {
+        info["invariant_failures"] = invariantFailures;
+    }
+
+    return root;
+}
+
 void
 ApplicationImpl::reportInfo()
 {
     mLedgerManager->loadLastKnownLedger(nullptr);
-    mCommandHandler->manualCmd("info");
+    LOG(INFO) << "info -> " << getJsonInfo().toStyledString();
 }
 
 Hash const&
@@ -241,6 +307,11 @@ ApplicationImpl::start()
 {
     mDatabase->upgradeToCurrentSchema();
 
+    if (mConfig.TESTING_UPGRADE_DATETIME.time_since_epoch().count() != 0)
+    {
+        mHerder->setUpgrades(mConfig);
+    }
+
     if (mPersistentState->getState(PersistentState::kForceSCPOnNextLaunch) ==
         "true")
     {
@@ -276,20 +347,18 @@ ApplicationImpl::start()
                     "Unable to restore last-known ledger state");
             }
 
-            // restores the SCP state before starting overlay
-            mHerder->restoreSCPState();
-            // perform maintenance tasks if configured to do so
-            // for now, we only perform it when CATCHUP_COMPLETE is not set
-            if (mConfig.MAINTENANCE_ON_STARTUP && !mConfig.CATCHUP_COMPLETE)
-            {
-                maintenance();
-            }
+            // restores Herder's state before starting overlay
+            mHerder->restoreState();
+            // set known cursors before starting maintenance job
+            ExternalQueue ps(*this);
+            ps.setInitialCursors(mConfig.KNOWN_CURSORS);
+            mMaintainer->start();
             mOverlayManager->start();
             auto npub = mHistoryManager->publishQueuedHistory();
             if (npub != 0)
             {
-                CLOG(INFO, "Ledger") << "Restarted publishing " << npub
-                                     << " queued snapshots";
+                CLOG(INFO, "Ledger")
+                    << "Restarted publishing " << npub << " queued snapshots";
             }
             if (mConfig.FORCE_SCP)
             {
@@ -428,14 +497,6 @@ ApplicationImpl::checkDB()
                               this->getDatabase(),
                               this->getBucketManager().getBucketList());
     });
-}
-
-void
-ApplicationImpl::maintenance()
-{
-    LOG(INFO) << "Performing maintenance";
-    ExternalQueue ps(*this);
-    ps.process();
 }
 
 void
@@ -578,6 +639,12 @@ ApplicationImpl::getHistoryManager()
     return *mHistoryManager;
 }
 
+Maintainer&
+ApplicationImpl::getMaintainer()
+{
+    return *mMaintainer;
+}
+
 ProcessManager&
 ApplicationImpl::getProcessManager()
 {
@@ -657,5 +724,23 @@ ApplicationImpl::enableInvariantsFromConfig()
     {
         mInvariantManager->enableInvariant(name);
     }
+}
+
+std::unique_ptr<Herder>
+ApplicationImpl::createHerder()
+{
+    return Herder::create(*this);
+}
+
+std::unique_ptr<InvariantManager>
+ApplicationImpl::createInvariantManager()
+{
+    return InvariantManager::create(*this);
+}
+
+std::unique_ptr<OverlayManager>
+ApplicationImpl::createOverlayManager()
+{
+    return OverlayManager::create(*this);
 }
 }

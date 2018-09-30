@@ -4,7 +4,9 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace stellar
 {
@@ -23,8 +25,8 @@ bool processExists(long pid);
 // Utility functions for operating on the filesystem.
 ////
 
-// returns true if the lock could be aquired
-bool lockFile(std::string const& path);
+// raises an exception if a lock file cannot be created
+void lockFile(std::string const& path);
 // unlocks a file locked with `lockFile`
 void unlockFile(std::string const& path);
 
@@ -39,6 +41,12 @@ bool mkdir(std::string const& path);
 
 // Make a dir path like mkdir -p, i.e. recursive, uses '/' as dir separator
 bool mkpath(std::string const& path);
+
+// Get list of all files with names matching predicate
+// Returned names are relative to path
+std::vector<std::string>
+findfiles(std::string const& path,
+          std::function<bool(std::string const& name)> predicate);
 
 class PathSplitter
 {
@@ -77,5 +85,8 @@ std::string remoteName(std::string const& type, std::string const& hexStr,
 void checkGzipSuffix(std::string const& filename);
 
 void checkNoGzipSuffix(std::string const& filename);
+
+// returns the maximum number of connections that can be done at the same time
+int getMaxConnections();
 }
 }

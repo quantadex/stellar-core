@@ -27,6 +27,20 @@ LoopbackPeer::LoopbackPeer(Application& app, PeerRole role) : Peer(app, role)
 {
 }
 
+PeerBareAddress
+LoopbackPeer::makeAddress(int remoteListeningPort) const
+{
+    if (remoteListeningPort <= 0 || remoteListeningPort > UINT16_MAX)
+    {
+        return PeerBareAddress{};
+    }
+    else
+    {
+        return PeerBareAddress{
+            "127.0.0.1", static_cast<unsigned short>(remoteListeningPort)};
+    }
+}
+
 AuthCert
 LoopbackPeer::getAuthCert()
 {
@@ -41,6 +55,12 @@ LoopbackPeer::getAuthCert()
 void
 LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
 {
+    if (mRemote.expired())
+    {
+        drop();
+        return;
+    }
+
     // Damage authentication material.
     if (mDamageAuth)
     {
@@ -57,14 +77,8 @@ LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
     }
 }
 
-std::string
-LoopbackPeer::getIP()
-{
-    return "127.0.0.1";
-}
-
 void
-LoopbackPeer::drop()
+LoopbackPeer::drop(bool)
 {
     if (mState == CLOSING)
     {
@@ -72,8 +86,7 @@ LoopbackPeer::drop()
     }
     mState = CLOSING;
     mIdleTimer.cancel();
-    auto self = shared_from_this();
-    getApp().getOverlayManager().dropPeer(self);
+    getApp().getOverlayManager().dropPeer(this);
 
     auto remote = mRemote.lock();
     if (remote)
@@ -139,7 +152,7 @@ LoopbackPeer::deliverOne()
     // CLOG(TRACE, "Overlay") << "LoopbackPeer attempting to deliver message";
     if (mRemote.expired())
     {
-        throw std::runtime_error("LoopbackPeer missing target");
+        return;
     }
 
     if (!mOutQueue.empty() && !mCorked)
@@ -363,8 +376,17 @@ LoopbackPeerConnection::LoopbackPeerConnection(Application& initiator,
     mAcceptor->mRemote = mInitiator;
     mAcceptor->mState = Peer::CONNECTED;
 
-    initiator.getOverlayManager().addConnectedPeer(mInitiator);
-    acceptor.getOverlayManager().addConnectedPeer(mAcceptor);
+    initiator.getOverlayManager().addPendingPeer(mInitiator);
+    acceptor.getOverlayManager().addPendingPeer(mAcceptor);
+
+    // if connection was dropped during addPendingPeer, we don't want do call
+    // connectHandler
+    if (mInitiator->mState != Peer::CONNECTED ||
+        mAcceptor->mState != Peer::CONNECTED)
+    {
+        return;
+    }
+
     mInitiator->startIdleTimer();
     mAcceptor->startIdleTimer();
 

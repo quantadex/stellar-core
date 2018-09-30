@@ -39,6 +39,13 @@ class Database;
 class LedgerManager
 {
   public:
+    static const uint32_t GENESIS_LEDGER_SEQ;
+    static const uint32_t GENESIS_LEDGER_VERSION;
+    static const uint32_t GENESIS_LEDGER_BASE_FEE;
+    static const uint32_t GENESIS_LEDGER_BASE_RESERVE;
+    static const uint32_t GENESIS_LEDGER_MAX_TX_SIZE;
+    static const int64_t GENESIS_LEDGER_TOTAL_COINS;
+
     enum State
     {
         // Loading state from database, not yet active
@@ -74,6 +81,9 @@ class LedgerManager
 
     // Factory
     static std::unique_ptr<LedgerManager> create(Application& app);
+
+    // Genesis ledger
+    static LedgerHeader genesisLedger();
 
     // Called by Herder to inform LedgerManager that a SCP has agreed on a new
     // close event. This is the most common cause of LedgerManager advancing
@@ -149,16 +159,18 @@ class LedgerManager
     // local buffer in which LedgerManager accumulates SCP consensus results
     // during catchup
     //
-    // If catchup is manual then that buffer is empty, and VERIFY_HASH_OK is
+    // If catchup is manual then that buffer is empty, and VERIFY_STATUS_OK is
     // returned.
     //
-    // Otherwise LedgerManager returns VERIFY_HASH_OK if the proposed ledger is
-    // a first member of that buffer (and has matching hash). VERIFY_HASH_BAD
-    // is returned otherwise.
+    // Otherwise LedgerManager returns VERIFY_STATUS_OK if the proposed ledger
+    // is a first member of that buffer (and has matching hash).
+    // VERIFY_STATUS_ERR_BAD_HASH is returned when hashes do not match.
+    // VERIFY_STATUS_ERR_BAD_LEDGER_VERSION is returned when history uses
+    // unknown ledger versions.
     //
     // If first member of consensus buffer has different sequnce than candidate
     // then we have error in code and stellar-core is aborted.
-    virtual HistoryManager::VerifyHashStatus
+    virtual HistoryManager::LedgerVerificationStatus
     verifyCatchupCandidate(LedgerHeaderHistoryEntry const& candidate,
                            bool manualCatchup) const = 0;
 
@@ -169,7 +181,8 @@ class LedgerManager
     virtual void closeLedger(LedgerCloseData const& ledgerData) = 0;
 
     // deletes old entries stored in the database
-    virtual void deleteOldEntries(Database& db, uint32_t ledgerSeq) = 0;
+    virtual void deleteOldEntries(Database& db, uint32_t ledgerSeq,
+                                  uint32_t count) = 0;
 
     // checks the database for inconsistencies between objects
     virtual void checkDbState() = 0;

@@ -57,12 +57,14 @@ HerderSCPDriver::SCPMetrics::SCPMetrics(Application& app)
 }
 
 HerderSCPDriver::HerderSCPDriver(Application& app, HerderImpl& herder,
+                                 Upgrades const& upgrades,
                                  PendingEnvelopes& pendingEnvelopes)
     : mApp{app}
     , mHerder{herder}
     , mLedgerManager{mApp.getLedgerManager()}
+    , mUpgrades{upgrades}
     , mPendingEnvelopes{pendingEnvelopes}
-    , mSCP(*this, mApp.getConfig().NODE_SEED,
+    , mSCP(*this, mApp.getConfig().NODE_SEED.getPublicKey(),
            mApp.getConfig().NODE_IS_VALIDATOR, mApp.getConfig().QUORUM_SET)
     , mSCPMetrics{mApp}
     , mLastStateChange{mApp.getClock().now()}
@@ -128,7 +130,7 @@ void
 HerderSCPDriver::signEnvelope(SCPEnvelope& envelope)
 {
     mSCPMetrics.mEnvelopeSign.Mark();
-    envelope.signature = mSCP.getSecretKey().sign(xdr::xdr_to_opaque(
+    envelope.signature = mApp.getConfig().NODE_SEED.sign(xdr::xdr_to_opaque(
         mApp.getNetworkID(), ENVELOPE_TYPE_SCP, envelope.statement));
 }
 
@@ -169,58 +171,6 @@ HerderSCPDriver::isSlotCompatibleWithCurrentState(uint64_t slotIndex) const
         res = (slotIndex == (lcl.header.ledgerSeq + 1));
     }
 
-    return res;
-}
-
-bool
-HerderSCPDriver::validateUpgradeStep(uint64_t slotIndex,
-                                     UpgradeType const& upgrade,
-                                     LedgerUpgradeType& upgradeType) const
-{
-    LedgerUpgrade lupgrade;
-
-    try
-    {
-        xdr::xdr_from_opaque(upgrade, lupgrade);
-    }
-    catch (xdr::xdr_runtime_error&)
-    {
-        return false;
-    }
-
-    bool res;
-    switch (lupgrade.type())
-    {
-    case LEDGER_UPGRADE_VERSION:
-    {
-        uint32 newVersion = lupgrade.newLedgerVersion();
-        res = (newVersion == mApp.getConfig().LEDGER_PROTOCOL_VERSION);
-    }
-    break;
-    case LEDGER_UPGRADE_BASE_FEE:
-    {
-        uint32 newFee = lupgrade.newBaseFee();
-        // allow fee to move within a 2x distance from the one we have in our
-        // config
-        res = (newFee >= mApp.getConfig().DESIRED_BASE_FEE * .5) &&
-              (newFee <= mApp.getConfig().DESIRED_BASE_FEE * 2);
-    }
-    break;
-    case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
-    {
-        // allow max to be within 30% of the config value
-        uint32 newMax = lupgrade.newMaxTxSetSize();
-        res = (newMax >= mApp.getConfig().DESIRED_MAX_TX_PER_LEDGER * 7 / 10) &&
-              (newMax <= mApp.getConfig().DESIRED_MAX_TX_PER_LEDGER * 13 / 10);
-    }
-    break;
-    default:
-        res = false;
-    }
-    if (res)
-    {
-        upgradeType = lupgrade.type();
-    }
     return res;
 }
 
@@ -322,7 +272,8 @@ HerderSCPDriver::validateValueHelper(uint64_t slotIndex,
 }
 
 SCPDriver::ValidationLevel
-HerderSCPDriver::validateValue(uint64_t slotIndex, Value const& value)
+HerderSCPDriver::validateValue(uint64_t slotIndex, Value const& value,
+                               bool nomination)
 {
     StellarValue b;
     try
@@ -343,7 +294,8 @@ HerderSCPDriver::validateValue(uint64_t slotIndex, Value const& value)
         for (size_t i = 0; i < b.upgrades.size(); i++)
         {
             LedgerUpgradeType thisUpgradeType;
-            if (!validateUpgradeStep(slotIndex, b.upgrades[i], thisUpgradeType))
+            if (!mUpgrades.isValid(b.closeTime, b.upgrades[i], thisUpgradeType,
+                                   nomination, mApp.getConfig()))
             {
                 CLOG(TRACE, "Herder")
                     << "HerderSCPDriver::validateValue invalid step at index "
@@ -393,8 +345,8 @@ HerderSCPDriver::extractValidValue(uint64_t slotIndex, Value const& value)
         LedgerUpgradeType thisUpgradeType;
         for (auto it = b.upgrades.begin(); it != b.upgrades.end();)
         {
-
-            if (!validateUpgradeStep(slotIndex, *it, thisUpgradeType))
+            if (!mUpgrades.isValid(b.closeTime, *it, thisUpgradeType, true,
+                                   mApp.getConfig()))
             {
                 it = b.upgrades.erase(it);
             }
@@ -462,8 +414,11 @@ HerderSCPDriver::setupTimer(uint64_t slotIndex, int timerID,
     }
     auto& timer = *it->second;
     timer.cancel();
-    timer.expires_from_now(timeout);
-    timer.async_wait(cb, &VirtualTimer::onFailureNoop);
+    if (cb)
+    {
+        timer.expires_from_now(timeout);
+        timer.async_wait(cb, &VirtualTimer::onFailureNoop);
+    }
 }
 
 // core SCP
@@ -515,28 +470,25 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
                 {
                 case LEDGER_UPGRADE_VERSION:
                     // pick the highest version
-                    if (clUpgrade.newLedgerVersion() <
-                        lupgrade.newLedgerVersion())
-                    {
-                        clUpgrade.newLedgerVersion() =
-                            lupgrade.newLedgerVersion();
-                    }
+                    clUpgrade.newLedgerVersion() =
+                        std::max(clUpgrade.newLedgerVersion(),
+                                 lupgrade.newLedgerVersion());
                     break;
                 case LEDGER_UPGRADE_BASE_FEE:
                     // take the max fee
-                    if (clUpgrade.newBaseFee() < lupgrade.newBaseFee())
-                    {
-                        clUpgrade.newBaseFee() = lupgrade.newBaseFee();
-                    }
+                    clUpgrade.newBaseFee() =
+                        std::max(clUpgrade.newBaseFee(), lupgrade.newBaseFee());
                     break;
                 case LEDGER_UPGRADE_MAX_TX_SET_SIZE:
                     // take the max tx set size
-                    if (clUpgrade.newMaxTxSetSize() <
-                        lupgrade.newMaxTxSetSize())
-                    {
-                        clUpgrade.newMaxTxSetSize() =
-                            lupgrade.newMaxTxSetSize();
-                    }
+                    clUpgrade.newMaxTxSetSize() =
+                        std::max(clUpgrade.newMaxTxSetSize(),
+                                 lupgrade.newMaxTxSetSize());
+                    break;
+                case LEDGER_UPGRADE_BASE_RESERVE:
+                    // take the max base reserve
+                    clUpgrade.newBaseReserve() = std::max(
+                        clUpgrade.newBaseReserve(), lupgrade.newBaseReserve());
                     break;
                 default:
                     // should never get there with values that are not valid
@@ -558,8 +510,9 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
 
             if (cTxSet && cTxSet->previousLedgerHash() == lcl.hash)
             {
-                if (!highestTxSet || (cTxSet->mTransactions.size() >
-                                      highestTxSet->mTransactions.size()) ||
+                if (!highestTxSet ||
+                    (cTxSet->mTransactions.size() >
+                     highestTxSet->mTransactions.size()) ||
                     ((cTxSet->mTransactions.size() ==
                       highestTxSet->mTransactions.size()) &&
                      lessThanXored(highest, sv.txSetHash, candidatesHash)))
@@ -619,8 +572,8 @@ HerderSCPDriver::valueExternalized(uint64_t slotIndex, Value const& value)
         //  * when getting back in sync (a gap potentially opened)
         // in both cases it's safe to just ignore those as we're already
         // tracking a more recent state
-        CLOG(DEBUG, "Herder") << "Ignoring old ledger externalize "
-                              << slotIndex;
+        CLOG(DEBUG, "Herder")
+            << "Ignoring old ledger externalize " << slotIndex;
         return;
     }
 
@@ -686,8 +639,8 @@ HerderSCPDriver::logQuorumInformation(uint64_t index)
         if (!i.empty())
         {
             Json::FastWriter fw;
-            CLOG(INFO, "Herder") << "Quorum information for " << index << " : "
-                                 << fw.write(i);
+            CLOG(INFO, "Herder")
+                << "Quorum information for " << index << " : " << fw.write(i);
         }
     }
 }

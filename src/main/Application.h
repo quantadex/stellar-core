@@ -4,7 +4,9 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "main/Config.h"
 #include "xdr/Stellar-types.h"
+#include <lib/json/json.h>
 #include <memory>
 #include <string>
 
@@ -21,12 +23,12 @@ namespace stellar
 {
 
 class VirtualClock;
-class Config;
 class TmpDirManager;
 class LedgerManager;
 class BucketManager;
 class CatchupManager;
 class HistoryManager;
+class Maintainer;
 class ProcessManager;
 class Herder;
 class HerderPersistence;
@@ -39,6 +41,9 @@ class CommandHandler;
 class WorkManager;
 class BanManager;
 class StatusManager;
+
+class Application;
+void validateNetworkPassphrase(std::shared_ptr<Application> app);
 
 /*
  * State of a single instance of the stellar-core application.
@@ -150,6 +155,8 @@ class Application
 
     virtual ~Application(){};
 
+    virtual void initialize() = 0;
+
     // Return the time in seconds since the POSIX epoch, according to the
     // VirtualClock this Application is bound to. Convenience method.
     virtual uint64_t timeNow() = 0;
@@ -184,6 +191,7 @@ class Application
     virtual BucketManager& getBucketManager() = 0;
     virtual CatchupManager& getCatchupManager() = 0;
     virtual HistoryManager& getHistoryManager() = 0;
+    virtual Maintainer& getMaintainer() = 0;
     virtual ProcessManager& getProcessManager() = 0;
     virtual Herder& getHerder() = 0;
     virtual HerderPersistence& getHerderPersistence() = 0;
@@ -232,9 +240,6 @@ class Application
     // Run a consistency check between the database and the bucketlist.
     virtual void checkDB() = 0;
 
-    // perform maintenance tasks
-    virtual void maintenance() = 0;
-
     // Execute any administrative commands written in the Config.COMMANDS
     // variable of the config file. This permits scripting certain actions to
     // occur automatically at startup.
@@ -243,6 +248,9 @@ class Application
     // Report, via standard logging, the current state any metrics defined in
     // the Config.REPORT_METRICS (or passed on the command line with --metric)
     virtual void reportCfgMetrics() = 0;
+
+    // Get information about the instance as JSON object
+    virtual Json::Value getJsonInfo() = 0;
 
     // Report information about the instance to standard logging
     virtual void reportInfo() = 0;
@@ -257,6 +265,18 @@ class Application
     // copy made of `cfg`.
     static pointer create(VirtualClock& clock, Config const& cfg,
                           bool newDB = true);
+    template <typename T>
+    static std::shared_ptr<T>
+    create(VirtualClock& clock, Config const& cfg, bool newDB = true)
+    {
+        auto ret = std::make_shared<T>(clock, cfg);
+        ret->initialize();
+        if (newDB || cfg.DATABASE.value == "sqlite3://:memory:")
+            ret->newDB();
+        validateNetworkPassphrase(ret);
+
+        return ret;
+    }
 
   protected:
     Application()

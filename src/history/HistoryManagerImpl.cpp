@@ -49,8 +49,6 @@ static string kSQLCreateStatement = "CREATE TABLE IF NOT EXISTS publishqueue ("
                                     "state    TEXT"
                                     "); ";
 
-const uint32_t HistoryManager::GENESIS_LEDGER_SEQ = 1;
-
 void
 HistoryManager::dropAll(Database& db)
 {
@@ -66,8 +64,8 @@ HistoryManager::initializeHistoryArchive(Application& app, std::string arch)
     auto i = cfg.HISTORY.find(arch);
     if (i == cfg.HISTORY.end())
     {
-        CLOG(FATAL, "History") << "Can't initialize unknown history archive '"
-                               << arch << "'";
+        CLOG(FATAL, "History")
+            << "Can't initialize unknown history archive '" << arch << "'";
         return false;
     }
 
@@ -77,18 +75,13 @@ HistoryManager::initializeHistoryArchive(Application& app, std::string arch)
     HistoryArchiveState existing;
     CLOG(INFO, "History") << "Probing history archive '" << arch
                           << "' for existing state";
-    auto getHas = wm.addWork<GetHistoryArchiveStateWork>(
-        "get-history-archive-state", existing, 0, std::chrono::seconds(0),
-        i->second, 0);
-    wm.advanceChildren();
-    while (!wm.allChildrenDone())
-    {
-        app.getClock().crank(false);
-    }
+    auto getHas = wm.executeWork<GetHistoryArchiveStateWork>(
+        false, "get-history-archive-state", existing, 0,
+        std::chrono::seconds(0), i->second, 0);
     if (getHas->getState() == Work::WORK_SUCCESS)
     {
-        CLOG(ERROR, "History") << "History archive '" << arch
-                               << "' already initialized!";
+        CLOG(ERROR, "History")
+            << "History archive '" << arch << "' already initialized!";
         return false;
     }
     CLOG(INFO, "History") << "History archive '" << arch
@@ -98,12 +91,8 @@ HistoryManager::initializeHistoryArchive(Application& app, std::string arch)
     CLOG(INFO, "History") << "Initializing history archive '" << arch << "'";
     has.resolveAllFutures();
 
-    auto putHas = wm.addWork<PutHistoryArchiveStateWork>(has, i->second);
-    wm.advanceChildren();
-    while (!wm.allChildrenDone())
-    {
-        app.getClock().crank(false);
-    }
+    auto putHas =
+        wm.executeWork<PutHistoryArchiveStateWork>(false, has, i->second);
     if (putHas->getState() == Work::WORK_SUCCESS)
     {
         CLOG(INFO, "History") << "Initialized history archive '" << arch << "'";
@@ -111,8 +100,8 @@ HistoryManager::initializeHistoryArchive(Application& app, std::string arch)
     }
     else
     {
-        CLOG(FATAL, "History") << "Failed to initialize history archive '"
-                               << arch << "'";
+        CLOG(FATAL, "History")
+            << "Failed to initialize history archive '" << arch << "'";
         return false;
     }
 }
@@ -577,17 +566,20 @@ HistoryManagerImpl::getPublishQueueStates()
     return states;
 }
 
-std::vector<std::string>
+PublishQueueBuckets::BucketCount
 HistoryManagerImpl::loadBucketsReferencedByPublishQueue()
 {
     auto states = getPublishQueueStates();
-    std::set<std::string> buckets;
+    PublishQueueBuckets::BucketCount result{};
     for (auto const& s : states)
     {
         auto sb = s.allBuckets();
-        buckets.insert(sb.begin(), sb.end());
+        for (auto const& b : sb)
+        {
+            result[b]++;
+        }
     }
-    return std::vector<std::string>(buckets.begin(), buckets.end());
+    return result;
 }
 
 std::vector<std::string>
@@ -595,7 +587,7 @@ HistoryManagerImpl::getBucketsReferencedByPublishQueue()
 {
     if (!mPublishQueueBucketsFilled)
     {
-        mPublishQueueBuckets.addBuckets(loadBucketsReferencedByPublishQueue());
+        mPublishQueueBuckets.setBuckets(loadBucketsReferencedByPublishQueue());
         mPublishQueueBucketsFilled = true;
     }
 

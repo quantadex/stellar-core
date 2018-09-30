@@ -225,8 +225,8 @@ InferredQuorum::checkQuorumIntersection(Config const& cfg) const
     {
         if (mQsetHashes.find(pk.first) == mQsetHashes.end())
         {
-            CLOG(WARNING, "History") << "Node without qset: "
-                                     << cfg.toShortString(pk.first);
+            CLOG(WARNING, "History")
+                << "Node without qset: " << cfg.toShortString(pk.first);
         }
     }
     CLOG(INFO, "History") << "Found " << nodeNumbers.size() << " nodes total";
@@ -271,13 +271,13 @@ InferredQuorum::checkQuorumIntersection(Config const& cfg) const
         auto name = cfg.toStrKey(revNodeNumbers.at(n), isAlias);
         if (allOk)
         {
-            CLOG(INFO, "History") << "  \"" << (isAlias ? "$" : "") << name
-                                  << '"';
+            CLOG(INFO, "History")
+                << "  \"" << (isAlias ? "$" : "") << name << '"';
         }
         else
         {
-            CLOG(WARNING, "History") << "  \"" << (isAlias ? "$" : "") << name
-                                     << '"';
+            CLOG(WARNING, "History")
+                << "  \"" << (isAlias ? "$" : "") << name << '"';
         }
     }
     return allOk;
@@ -336,10 +336,8 @@ InferredQuorum::toString(Config const& cfg) const
 }
 
 void
-InferredQuorum::writeQuorumGraph(Config const& cfg,
-                                 std::string const& filename) const
+InferredQuorum::writeQuorumGraph(Config const& cfg, std::ostream& out) const
 {
-    std::ofstream out(filename);
     out << "digraph {" << std::endl;
     for (auto const& pkq : mQsetHashes)
     {

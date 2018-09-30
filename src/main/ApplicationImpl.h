@@ -37,6 +37,8 @@ class ApplicationImpl : public Application
     ApplicationImpl(VirtualClock& clock, Config const& cfg);
     virtual ~ApplicationImpl() override;
 
+    virtual void initialize() override;
+
     virtual uint64_t timeNow() override;
 
     virtual Config const& getConfig() override;
@@ -53,6 +55,7 @@ class ApplicationImpl : public Application
     virtual BucketManager& getBucketManager() override;
     virtual CatchupManager& getCatchupManager() override;
     virtual HistoryManager& getHistoryManager() override;
+    virtual Maintainer& getMaintainer() override;
     virtual ProcessManager& getProcessManager() override;
     virtual Herder& getHerder() override;
     virtual HerderPersistence& getHerderPersistence() override;
@@ -90,11 +93,11 @@ class ApplicationImpl : public Application
 
     virtual void checkDB() override;
 
-    virtual void maintenance() override;
-
     virtual void applyCfgCommands() override;
 
     virtual void reportCfgMetrics() override;
+
+    virtual Json::Value getJsonInfo() override;
 
     virtual void reportInfo() override;
 
@@ -131,6 +134,7 @@ class ApplicationImpl : public Application
     std::unique_ptr<HerderPersistence> mHerderPersistence;
     std::unique_ptr<HistoryManager> mHistoryManager;
     std::unique_ptr<InvariantManager> mInvariantManager;
+    std::unique_ptr<Maintainer> mMaintainer;
     std::shared_ptr<ProcessManager> mProcessManager;
     std::unique_ptr<CommandHandler> mCommandHandler;
     std::shared_ptr<WorkManager> mWorkManager;
@@ -152,6 +156,7 @@ class ApplicationImpl : public Application
     medida::Counter& mAppStateCurrent;
     medida::Timer& mAppStateChanges;
     VirtualClock::time_point mLastStateChange;
+    VirtualClock::time_point mStartedOn;
 
     Hash mNetworkID;
 
@@ -159,5 +164,9 @@ class ApplicationImpl : public Application
     void runWorkerThread(unsigned i);
 
     void enableInvariantsFromConfig();
+
+    virtual std::unique_ptr<Herder> createHerder();
+    virtual std::unique_ptr<InvariantManager> createInvariantManager();
+    virtual std::unique_ptr<OverlayManager> createOverlayManager();
 };
 }

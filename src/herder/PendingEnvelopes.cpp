@@ -59,15 +59,18 @@ PendingEnvelopes::peerDoesntHave(MessageType type, Hash const& itemID,
 }
 
 void
-PendingEnvelopes::addSCPQuorumSet(Hash hash, uint64 lastSeenSlotIndex,
-                                  const SCPQuorumSet& q)
+PendingEnvelopes::addSCPQuorumSet(Hash hash, const SCPQuorumSet& q)
 {
     assert(isQuorumSetSane(q, false));
 
     CLOG(TRACE, "Herder") << "Add SCPQSet " << hexAbbrev(hash);
 
     SCPQuorumSetPtr qset(new SCPQuorumSet(q));
-    mQsetCache.put(hash, std::make_pair(lastSeenSlotIndex, qset));
+    mQsetCache.put(hash, qset);
+
+    // force recomputation of transitive quorum information
+    mNodesInQuorum.clear();
+
     mQuorumSetFetcher.recv(hash);
 }
 
@@ -84,7 +87,7 @@ PendingEnvelopes::recvSCPQuorumSet(Hash hash, const SCPQuorumSet& q)
 
     if (isQuorumSetSane(q, false))
     {
-        addSCPQuorumSet(hash, lastSeenSlotIndex, q);
+        addSCPQuorumSet(hash, q);
         return true;
     }
     else
@@ -140,27 +143,16 @@ PendingEnvelopes::isNodeInQuorum(NodeID const& node)
     {
         res = mNodesInQuorum.get(node);
     }
-
-    if (!res)
+    else
     {
         // search through the known slots
         SCP::TriBool r = mHerder.getSCP().isNodeInQuorum(node);
-        if (r == SCP::TB_TRUE)
-        {
-            // only cache positive answers
-            // so that nodes can be added during rounds
-            mNodesInQuorum.put(node, true);
-            res = true;
-        }
-        else if (r == SCP::TB_FALSE)
-        {
-            res = false;
-        }
-        else
-        {
-            // MAYBE -> return true, but don't cache
-            res = true;
-        }
+
+        // consider a node in quorum if it's either in quorum
+        // or we don't know if it is (until we get further evidence)
+        res = (r != SCP::TB_FALSE);
+
+        mNodesInQuorum.put(node, res);
     }
 
     return res;
@@ -173,9 +165,9 @@ PendingEnvelopes::recvSCPEnvelope(SCPEnvelope const& envelope)
     auto const& nodeID = envelope.statement.nodeID;
     if (!isNodeInQuorum(nodeID))
     {
-        CLOG(DEBUG, "Herder") << "Dropping envelope from "
-                              << mApp.getConfig().toShortString(nodeID)
-                              << " (not in quorum)";
+        CLOG(DEBUG, "Herder")
+            << "Dropping envelope from "
+            << mApp.getConfig().toShortString(nodeID) << " (not in quorum)";
         return Herder::ENVELOPE_STATUS_DISCARDED;
     }
 
@@ -353,8 +345,8 @@ PendingEnvelopes::touchFetchCache(SCPEnvelope const& envelope)
         Slot::getCompanionQuorumSetHashFromStatement(envelope.statement);
     if (mQsetCache.exists(qsetHash))
     {
-        auto& item = mQsetCache.get(qsetHash);
-        item.first = std::max(item.first, envelope.statement.slotIndex);
+        // touch LRU
+        mQsetCache.get(qsetHash);
     }
 
     for (auto const& h : getTxSetHashes(envelope))
@@ -413,9 +405,6 @@ PendingEnvelopes::eraseBelow(uint64 slotIndex)
 
     // 0 is special mark for data that we do not know the slot index
     // it is used for state loaded from database
-    mQsetCache.erase_if([&](SCPQuorumSetCacheItem const& i) {
-        return i.first != 0 && i.first < slotIndex;
-    });
     mTxSetCache.erase_if([&](TxSetFramCacheItem const& i) {
         return i.first != 0 && i.first < slotIndex;
     });
@@ -424,6 +413,9 @@ PendingEnvelopes::eraseBelow(uint64 slotIndex)
 void
 PendingEnvelopes::slotClosed(uint64 slotIndex)
 {
+    // force recomputing the quorums
+    mNodesInQuorum.clear();
+
     // stop processing envelopes & downloads for the slot falling off the
     // window
     if (slotIndex > Herder::MAX_SLOTS_TO_REMEMBER)
@@ -435,9 +427,6 @@ PendingEnvelopes::slotClosed(uint64 slotIndex)
         mTxSetFetcher.stopFetchingBelow(slotIndex + 1);
         mQuorumSetFetcher.stopFetchingBelow(slotIndex + 1);
 
-        mQsetCache.erase_if([&](SCPQuorumSetCacheItem const& i) {
-            return i.first == slotIndex;
-        });
         mTxSetCache.erase_if(
             [&](TxSetFramCacheItem const& i) { return i.first == slotIndex; });
     }
@@ -459,7 +448,7 @@ PendingEnvelopes::getQSet(Hash const& hash)
 {
     if (mQsetCache.exists(hash))
     {
-        return mQsetCache.get(hash).second;
+        return mQsetCache.get(hash);
     }
 
     return SCPQuorumSetPtr();

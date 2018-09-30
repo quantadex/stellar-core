@@ -6,8 +6,8 @@
 
 #include "util/asio.h"
 
-#include "StellarCoreVersion.h"
 #include "main/Config.h"
+#include "main/StellarCoreVersion.h"
 #include "test.h"
 #include "test/TestUtils.h"
 #include "util/Logging.h"
@@ -43,6 +43,7 @@ namespace stellar
 static std::vector<std::string> gTestMetrics;
 static std::vector<std::unique_ptr<Config>> gTestCfg[Config::TESTDB_MODES];
 static std::vector<TmpDir> gTestRoots;
+static bool gTestAllVersions{false};
 
 bool force_sqlite = (std::getenv("STELLAR_FORCE_SQLITE") != nullptr);
 
@@ -79,11 +80,17 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         thisConfig.LOG_FILE_PATH = sstream.str();
         thisConfig.BUCKET_DIR_PATH = rootDir + "bucket";
 
-        thisConfig.INVARIANT_CHECKS = {"CacheIsConsistentWithDatabase",
-                                       "ChangedAccountsSubentriesCountIsValid",
-                                       "TotalCoinsEqualsBalancesPlusFeePool"};
+        thisConfig.INVARIANT_CHECKS = {"AccountSubEntriesCountIsValid",
+                                       "BucketListIsConsistentWithDatabase",
+                                       "CacheIsConsistentWithDatabase",
+                                       "ConservationOfLumens",
+                                       "LedgerEntryIsValid",
+                                       "MinimumAccountBalance"};
 
         thisConfig.ALLOW_LOCALHOST_FOR_TESTING = true;
+
+        // this forces to pick up any other potential upgrades
+        thisConfig.TESTING_UPGRADE_DATETIME = VirtualClock::from_time_t(1);
 
         // Tests are run in standalone by default, meaning that no external
         // listening interfaces are opened (all sockets must be manually created
@@ -151,29 +158,50 @@ test(int argc, char* const* argv, el::Level ll,
     LOG(INFO) << "Testing stellar-core " << STELLAR_CORE_VERSION;
     LOG(INFO) << "Logging to " << cfg.LOG_FILE_PATH;
 
-    int r = Catch::Session().run(argc, argv);
+    using namespace Catch;
+    Session session{};
+    auto r =
+        session.applyCommandLine(argc, argv, Session::OnUnusedOptions::Ignore);
+    if (r != 0)
+        return r;
+
+    auto unusedTokens = session.unusedTokens();
+    using namespace Clara;
+
+    for (auto const& token : unusedTokens)
+    {
+        if (token.type == Parser::Token::LongOpt &&
+            token.data == "all-versions")
+        {
+            gTestAllVersions = true;
+            continue;
+        }
+
+        session.showHelp(session.configData().processName);
+        return -1;
+    }
+
+    r = session.run();
     gTestRoots.clear();
     gTestCfg->clear();
     return r;
 }
 
 void
-for_versions_to(int to, Application& app,
-                std::function<void(void)> const& f)
+for_versions_to(uint32 to, Application& app, std::function<void(void)> const& f)
 {
     for_versions(1, to, app, f);
 }
 
 void
-for_versions_from(int from, Application& app,
+for_versions_from(uint32 from, Application& app,
                   std::function<void(void)> const& f)
 {
     for_versions(from, Config::CURRENT_LEDGER_PROTOCOL_VERSION, app, f);
 }
 
 void
-for_versions_from(std::vector<int> const& versions,
-                  Application& app,
+for_versions_from(std::vector<uint32> const& versions, Application& app,
                   std::function<void(void)> const& f)
 {
     for_versions(versions, app, f);
@@ -181,21 +209,20 @@ for_versions_from(std::vector<int> const& versions,
 }
 
 void
-for_all_versions(Application& app,
-                 std::function<void(void)> const& f)
+for_all_versions(Application& app, std::function<void(void)> const& f)
 {
     for_versions(1, Config::CURRENT_LEDGER_PROTOCOL_VERSION, app, f);
 }
 
 void
-for_versions(int from, int to, Application& app,
+for_versions(uint32 from, uint32 to, Application& app,
              std::function<void(void)> const& f)
 {
     if (from > to)
     {
         return;
     }
-    auto versions = std::vector<int>{};
+    auto versions = std::vector<uint32>{};
     versions.resize(to - from + 1);
     std::iota(std::begin(versions), std::end(versions), from);
 
@@ -203,18 +230,16 @@ for_versions(int from, int to, Application& app,
 }
 
 void
-for_versions(std::vector<int> const& versions, Application& app,
+for_versions(std::vector<uint32> const& versions, Application& app,
              std::function<void(void)> const& f)
 {
     auto previousVersion = app.getLedgerManager().getCurrentLedgerVersion();
     for (auto v : versions)
     {
-#ifdef TEST_ONLY_CURRENT_PROTOCOL
-        if (v != Config::CURRENT_LEDGER_PROTOCOL_VERSION)
+        if (!gTestAllVersions && v != Config::CURRENT_LEDGER_PROTOCOL_VERSION)
         {
             continue;
         }
-#endif
         SECTION("protocol version " + std::to_string(v))
         {
             testutil::setCurrentLedgerVersion(app.getLedgerManager(), v);
@@ -225,12 +250,11 @@ for_versions(std::vector<int> const& versions, Application& app,
 }
 
 void
-for_all_versions_except(std::vector<int> const& versions,
-                        Application& app,
+for_all_versions_except(std::vector<uint32> const& versions, Application& app,
                         std::function<void(void)> const& f)
 {
-    int lastExcept = 0;
-    for (int except : versions)
+    uint32 lastExcept = 0;
+    for (uint32 except : versions)
     {
         for_versions(lastExcept + 1, except - 1, app, f);
         lastExcept = except;

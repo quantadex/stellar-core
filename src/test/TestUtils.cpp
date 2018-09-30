@@ -3,25 +3,83 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "TestUtils.h"
+#include "overlay/LoopbackPeer.h"
 #include "util/make_unique.h"
 
 namespace stellar
 {
 
-Application::pointer
-createTestApplication(VirtualClock& clock, Config const& cfg)
+namespace testutil
 {
-    auto app = Application::create(clock, cfg);
-    auto& lm = app->getLedgerManager();
-    lm.getCurrentLedgerHeader().baseFee = cfg.DESIRED_BASE_FEE;
-    testutil::setCurrentLedgerVersion(lm, cfg.LEDGER_PROTOCOL_VERSION);
-    return app;
+
+void
+setCurrentLedgerVersion(LedgerManager& lm, uint32_t currentLedgerVersion)
+{
+    lm.getCurrentLedgerHeader().ledgerVersion = currentLedgerVersion;
 }
 
 void
-testutil::setCurrentLedgerVersion(LedgerManager& lm, uint32_t currentLedgerVersion)
+crankSome(VirtualClock& clock)
 {
-    lm.getCurrentLedgerHeader().ledgerVersion = currentLedgerVersion;
+    auto start = clock.now();
+    for (size_t i = 0;
+         (i < 100 && clock.now() < (start + std::chrono::seconds(1)) &&
+          clock.crank(false) > 0);
+         ++i)
+        ;
+}
+
+void
+injectSendPeersAndReschedule(VirtualClock::time_point& end, VirtualClock& clock,
+                             VirtualTimer& timer,
+                             LoopbackPeerConnection& connection)
+{
+    connection.getInitiator()->sendGetPeers();
+    if (clock.now() < end && connection.getInitiator()->isConnected())
+    {
+        timer.expires_from_now(std::chrono::milliseconds(10));
+        timer.async_wait([&](asio::error_code const& ec) {
+            if (!ec)
+            {
+                injectSendPeersAndReschedule(end, clock, timer, connection);
+            }
+        });
+    }
+}
+
+BucketListDepthModifier::BucketListDepthModifier(uint32_t newDepth)
+    : mPrevDepth(BucketList::kNumLevels)
+{
+    BucketList::kNumLevels = newDepth;
+}
+
+BucketListDepthModifier::~BucketListDepthModifier()
+{
+    BucketList::kNumLevels = mPrevDepth;
+}
+}
+
+TestInvariantManager::TestInvariantManager(medida::MetricsRegistry& registry)
+    : InvariantManagerImpl(registry)
+{
+}
+
+void
+TestInvariantManager::handleInvariantFailure(
+    std::shared_ptr<Invariant> invariant, std::string const& message) const
+{
+    throw InvariantDoesNotHold{message};
+}
+
+TestApplication::TestApplication(VirtualClock& clock, Config const& cfg)
+    : ApplicationImpl(clock, cfg)
+{
+}
+
+std::unique_ptr<InvariantManager>
+TestApplication::createInvariantManager()
+{
+    return make_unique<TestInvariantManager>(getMetrics());
 }
 
 time_t
@@ -46,5 +104,12 @@ getTestDateTime(int day, int month, int year, int hour, int minute, int second)
     tm.tm_mon = month - 1; // 0 based
     tm.tm_year = year - 1900;
     return tm;
+}
+
+VirtualClock::time_point
+genesis(int minute, int second)
+{
+    return VirtualClock::tmToPoint(
+        getTestDateTime(1, 7, 2014, 0, minute, second));
 }
 }

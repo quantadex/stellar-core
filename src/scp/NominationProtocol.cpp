@@ -74,7 +74,7 @@ NominationProtocol::isSubsetHelper(xdr::xvector<Value> const& p,
 SCPDriver::ValidationLevel
 NominationProtocol::validateValue(Value const& v)
 {
-    return mSlot.getSCPDriver().validateValue(mSlot.getSlotIndex(), v);
+    return mSlot.getSCPDriver().validateValue(mSlot.getSlotIndex(), v, true);
 }
 
 Value
@@ -231,8 +231,8 @@ NominationProtocol::updateRoundLeaders()
     if (Logging::logDebug("SCP"))
         for (auto const& rl : mRoundLeaders)
         {
-            CLOG(DEBUG, "SCP") << "    leader "
-                               << mSlot.getSCPDriver().toShortString(rl);
+            CLOG(DEBUG, "SCP")
+                << "    leader " << mSlot.getSCPDriver().toShortString(rl);
         }
 }
 
@@ -397,6 +397,8 @@ NominationProtocol::processEnvelope(SCPEnvelope const& envelope)
                     {
                         mVotes.emplace(newVote);
                         modified = true;
+                        mSlot.getSCPDriver().nominatingValue(
+                            mSlot.getSlotIndex(), newVote);
                     }
                 }
 
@@ -442,8 +444,8 @@ NominationProtocol::nominate(Value const& value, Value const& previousValue,
                              bool timedout)
 {
     if (Logging::logDebug("SCP"))
-        CLOG(DEBUG, "SCP") << "NominationProtocol::nominate "
-                           << mSlot.getSCP().getValueString(value);
+        CLOG(DEBUG, "SCP") << "NominationProtocol::nominate (" << mRoundNumber
+                           << ") " << mSlot.getSCP().getValueString(value);
 
     bool updated = false;
 

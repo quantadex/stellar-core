@@ -8,10 +8,14 @@
 #include "util/Logging.h"
 #include <map>
 #include <regex>
+#include <sstream>
 
 #ifdef _WIN32
 #include <direct.h>
+#include <filesystem>
 #else
+#include <dirent.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #endif
 
@@ -30,12 +34,15 @@ namespace fs
 
 static std::map<std::string, HANDLE> lockMap;
 
-bool
+void
 lockFile(std::string const& path)
 {
+    std::ostringstream errmsg;
+
     if (lockMap.find(path) != lockMap.end())
     {
-        throw std::runtime_error("file is already locked by this process");
+        errmsg << "file already locked by this process: " << path;
+        throw std::runtime_error(errmsg.str());
     }
     HANDLE h = ::CreateFile(path.c_str(), GENERIC_WRITE,
                             0, // don't allow sharing
@@ -43,11 +50,14 @@ lockFile(std::string const& path)
                             FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_TEMPORARY |
                                 FILE_FLAG_DELETE_ON_CLOSE,
                             NULL);
-    if (h != INVALID_HANDLE_VALUE)
+    if (h == INVALID_HANDLE_VALUE)
     {
-        lockMap.insert(std::make_pair(path, h));
+        // not sure if there is more verbose info that can be obtained here
+        errmsg << "unable to create lock file: " << path;
+        throw std::runtime_error(errmsg.str());
     }
-    return h != INVALID_HANDLE_VALUE;
+
+    lockMap.insert(std::make_pair(path, h));
 }
 
 void
@@ -111,6 +121,28 @@ deltree(std::string const& d)
     }
 }
 
+std::vector<std::string>
+findfiles(std::string const& p,
+          std::function<bool(std::string const& name)> predicate)
+{
+    using namespace std;
+    namespace fs = std::experimental::filesystem;
+
+    std::vector<std::string> res;
+    for (auto& entry : fs::directory_iterator(fs::path(p)))
+    {
+        if (fs::is_regular_file(entry.status()))
+        {
+            auto n = entry.path().filename().string();
+            if (predicate(n))
+            {
+                res.emplace_back(n);
+            }
+        }
+    }
+    return res;
+}
+
 long
 getCurrentPid()
 {
@@ -152,29 +184,35 @@ processExists(long pid)
 
 static std::map<std::string, int> lockMap;
 
-bool
+void
 lockFile(std::string const& path)
 {
+    std::ostringstream errmsg;
+
     if (lockMap.find(path) != lockMap.end())
     {
-        throw std::runtime_error("file is already locked by this process");
+        errmsg << "file is already locked by this process: " << path;
+        throw std::runtime_error(errmsg.str());
     }
     int fd = open(path.c_str(), O_RDWR | O_CREAT, S_IRWXU);
 
-    if (fd != -1)
+    if (fd == -1)
     {
-        int r = flock(fd, LOCK_EX | LOCK_NB);
-        if (r == 0)
-        {
-            lockMap.insert(std::make_pair(path, fd));
-        }
-        else
-        {
-            close(fd);
-            fd = -1;
-        }
+        errmsg << "unable to open lock file: " << path << " ("
+               << strerror(errno) << ")";
+        throw std::runtime_error(errmsg.str());
     }
-    return fd != -1;
+
+    int r = flock(fd, LOCK_EX | LOCK_NB);
+    if (r != 0)
+    {
+        close(fd);
+        errmsg << "unable to flock file: " << path << " (" << strerror(errno)
+               << ")";
+        throw std::runtime_error(errmsg.str());
+    }
+
+    lockMap.insert(std::make_pair(path, fd));
 }
 
 void
@@ -254,6 +292,39 @@ deltree(std::string const& d)
     if (nftw(d.c_str(), nftw_deltree_callback, FOPEN_MAX, FTW_DEPTH) != 0)
     {
         throw std::runtime_error("nftw failed in deltree for " + d);
+    }
+}
+
+std::vector<std::string>
+findfiles(std::string const& path,
+          std::function<bool(std::string const& name)> predicate)
+{
+    auto dir = opendir(path.c_str());
+    auto result = std::vector<std::string>{};
+    if (!dir)
+    {
+        return result;
+    }
+
+    try
+    {
+        while (auto entry = readdir(dir))
+        {
+            auto name = std::string{entry->d_name};
+            if (predicate(name))
+            {
+                result.push_back(name);
+            }
+        }
+
+        closedir(dir);
+        return result;
+    }
+    catch (...)
+    {
+        // small RAII class could do here
+        closedir(dir);
+        throw;
     }
 }
 
@@ -370,5 +441,30 @@ checkNoGzipSuffix(std::string const& filename)
         throw std::runtime_error("filename ends in .gz");
     }
 }
+
+#ifdef _WIN32
+
+int
+getMaxConnections()
+{
+    // on Windows, there is no limit on handles
+    // only limits based on ephemeral ports, etc
+    return 32000;
+}
+
+#else
+int
+getMaxConnections()
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0)
+    {
+        // leave some buffer
+        return (rl.rlim_cur * 3) / 4;
+    }
+    // could not query the limit, default to a value that should work
+    return 64;
+}
+#endif
 }
 }

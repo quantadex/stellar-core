@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "TxSetFrame.h"
+#include "Upgrades.h"
 #include "lib/json/json-forwards.h"
 #include "overlay/StellarXDR.h"
 #include "scp/SCP.h"
@@ -94,8 +95,8 @@ class Herder
 
     virtual void bootstrap() = 0;
 
-    // restores SCP state based on the last messages saved on disk
-    virtual void restoreSCPState() = 0;
+    // restores Herder's state from disk
+    virtual void restoreState() = 0;
 
     virtual bool recvSCPQuorumSet(Hash const& hash,
                                   SCPQuorumSet const& qset) = 0;
@@ -109,6 +110,11 @@ class Herder
 
     // We are learning about a new envelope.
     virtual EnvelopeStatus recvSCPEnvelope(SCPEnvelope const& envelope) = 0;
+
+    // We are learning about a new fully-fetched envelope.
+    virtual EnvelopeStatus recvSCPEnvelope(SCPEnvelope const& envelope,
+                                           const SCPQuorumSet& qset,
+                                           TxSetFrame txset) = 0;
 
     // a peer needs our SCP state
     virtual void sendSCPStateToPeer(uint32 ledgerSeq, PeerPtr peer) = 0;
@@ -125,6 +131,11 @@ class Herder
 
     // lookup a nodeID in config and in SCP messages
     virtual bool resolveNodeID(std::string const& s, PublicKey& retKey) = 0;
+
+    // sets the upgrades that should be applied during consensus
+    virtual void setUpgrades(Upgrades::UpgradeParameters const& upgrades) = 0;
+    // gets the upgrades that are scheduled by this node
+    virtual std::string getUpgradesJson() = 0;
 
     virtual ~Herder()
     {

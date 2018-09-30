@@ -8,6 +8,7 @@
 #include "crypto/Hex.h"
 #include "crypto/SHA.h"
 #include "database/Database.h"
+#include "database/DatabaseUtils.h"
 #include "util/Logging.h"
 #include "util/XDRStream.h"
 #include "util/format.h"
@@ -230,8 +231,8 @@ LedgerHeaderFrame::copyLedgerHeadersToStream(Database& db, soci::session& sess,
         LedgerHeaderFrame::pointer lhf = decodeFromData(headerEncoded);
         lhe.hash = lhf->getHash();
         lhe.header = lhf->mHeader;
-        CLOG(DEBUG, "Ledger") << "Streaming ledger-header "
-                              << lhe.header.ledgerSeq;
+        CLOG(DEBUG, "Ledger")
+            << "Streaming ledger-header " << lhe.header.ledgerSeq;
         headersOut.writeOne(lhe);
         ++n;
         st.fetch();
@@ -240,10 +241,11 @@ LedgerHeaderFrame::copyLedgerHeadersToStream(Database& db, soci::session& sess,
 }
 
 void
-LedgerHeaderFrame::deleteOldEntries(Database& db, uint32_t ledgerSeq)
+LedgerHeaderFrame::deleteOldEntries(Database& db, uint32_t ledgerSeq,
+                                    uint32_t count)
 {
-    db.getSession() << "DELETE FROM ledgerheaders WHERE ledgerseq <= "
-                    << ledgerSeq;
+    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+                                          "ledgerheaders", "ledgerseq");
 }
 
 void

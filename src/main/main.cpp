@@ -2,7 +2,6 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 #include "util/asio.h"
-#include "StellarCoreVersion.h"
 #include "bucket/Bucket.h"
 #include "bucket/BucketManager.h"
 #include "catchup/CatchupConfiguration.h"
@@ -14,12 +13,16 @@
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
 #include "history/HistoryManager.h"
+#include "historywork/GetHistoryArchiveStateWork.h"
 #include "ledger/LedgerManager.h"
 #include "lib/http/HttpClient.h"
 #include "lib/util/getopt.h"
 #include "main/Application.h"
 #include "main/Config.h"
+#include "main/ExternalQueue.h"
+#include "main/Maintainer.h"
 #include "main/PersistentState.h"
+#include "main/StellarCoreVersion.h"
 #include "main/dumpxdr.h"
 #include "main/fuzz.h"
 #include "test/test.h"
@@ -27,6 +30,7 @@
 #include "util/Logging.h"
 #include "util/Timer.h"
 #include "util/optional.h"
+#include "work/WorkManager.h"
 #include <lib/util/format.h>
 #include <limits>
 #include <locale>
@@ -60,6 +64,8 @@ enum opttag
     OPT_HELP,
     OPT_INFERQUORUM,
     OPT_OFFLINEINFO,
+    OPT_OUTPUT_FILE,
+    OPT_REPORT_LAST_HISTORY_CHECKPOINT,
     OPT_LOGLEVEL,
     OPT_METRIC,
     OPT_NEWDB,
@@ -95,6 +101,9 @@ static const struct option stellar_core_options[] = {
     {"help", no_argument, nullptr, OPT_HELP},
     {"inferquorum", optional_argument, nullptr, OPT_INFERQUORUM},
     {"offlineinfo", no_argument, nullptr, OPT_OFFLINEINFO},
+    {"output-file", required_argument, nullptr, OPT_OUTPUT_FILE},
+    {"report-last-history-checkpoint", no_argument, nullptr,
+     OPT_REPORT_LAST_HISTORY_CHECKPOINT},
     {"sec2pub", no_argument, nullptr, OPT_SEC2PUB},
     {"ll", required_argument, nullptr, OPT_LOGLEVEL},
     {"metric", required_argument, nullptr, OPT_METRIC},
@@ -142,6 +151,8 @@ usage(int err = 1)
           "history\n"
           "      --checkquorum        Check quorum intersection from history\n"
           "      --graphquorum        Print a quorum set graph from history\n"
+          "      --output-file        Output file for --graphquorum and "
+          "--report-last-history-checkpoint commands\n"
           "      --offlineinfo        Return information for an offline "
           "instance\n"
           "      --ll LEVEL           Set the log level. (redundant with --c "
@@ -158,6 +169,9 @@ usage(int err = 1)
           "ARCH\n"
           "      --printtxn FILE      Pretty-print one transaction envelope,"
           " then quit\n"
+          "      --report-last-history-checkpoint\n"
+          "                           Report information about last checkpoint "
+          "available in history archives\n"
           "      --signtxn FILE       Add signature to transaction envelope,"
           " then quit\n"
           "                           (Key is read from stdin or terminal, as"
@@ -167,8 +181,7 @@ usage(int err = 1)
           "      --netid STRING       Specify network ID for subsequent "
           "signtxn\n"
           "                           (Default is STELLAR_NETWORK_ID "
-          "environment\n"
-          "variable)\n"
+          "environment variable)\n"
           "      --test               Run self-tests\n"
           "      --version            Print version information\n";
     exit(err);
@@ -249,99 +262,179 @@ checkInitialized(Application::pointer app)
     return true;
 }
 
+static int
+catchup(Application::pointer app, uint32_t to, uint32_t count,
+        Json::Value& catchupInfo)
+{
+    if (!checkInitialized(app))
+    {
+        return 1;
+    }
+
+    auto done = false;
+    app->getLedgerManager().loadLastKnownLedger(
+        [&done](asio::error_code const& ec) {
+            if (ec)
+            {
+                throw std::runtime_error(
+                    "Unable to restore last-known ledger state");
+            }
+
+            done = true;
+        });
+    auto& clock = app->getClock();
+    while (!done && clock.crank(true))
+        ;
+
+    try
+    {
+        app->getLedgerManager().startCatchUp({to, count}, true);
+    }
+    catch (std::invalid_argument const&)
+    {
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Target ledger " << to
+                  << " is not newer than last closed ledger"
+                  << " - nothing to do";
+        LOG(INFO) << "* If you really want to catchup to " << to
+                  << " run stellar-core with --newdb parameter.";
+        LOG(INFO) << "*";
+        return 2;
+    }
+
+    auto& io = clock.getIOService();
+    auto synced = false;
+    asio::io_service::work mainWork(io);
+    done = false;
+    while (!done && clock.crank(true))
+    {
+        switch (app->getLedgerManager().getState())
+        {
+        case LedgerManager::LM_BOOTING_STATE:
+        {
+            LOG(INFO) << "*";
+            LOG(INFO) << "* Catchup failed.";
+            LOG(INFO) << "*";
+            done = true;
+            break;
+        }
+        case LedgerManager::LM_SYNCED_STATE:
+        {
+            LOG(INFO) << "*";
+            LOG(INFO) << "* Catchup finished.";
+            LOG(INFO) << "*";
+            done = true;
+            synced = true;
+            break;
+        }
+        case LedgerManager::LM_CATCHING_UP_STATE:
+            break;
+        }
+    }
+
+    catchupInfo = app->getJsonInfo();
+    return synced ? 0 : 3;
+}
+
+static int
+catchupAt(Application::pointer app, uint32_t at, Json::Value& catchupInfo)
+{
+    return catchup(app, at, 0, catchupInfo);
+}
+
+static int
+catchupComplete(Application::pointer app, Json::Value& catchupInfo)
+{
+    return catchup(app, CatchupConfiguration::CURRENT,
+                   std::numeric_limits<uint32_t>::max(), catchupInfo);
+}
+
+static int
+catchupRecent(Application::pointer app, uint32_t count,
+              Json::Value& catchupInfo)
+{
+    return catchup(app, CatchupConfiguration::CURRENT, count, catchupInfo);
+}
+
+static int
+catchupTo(Application::pointer app, uint32_t to, Json::Value& catchupInfo)
+{
+    return catchup(app, to, std::numeric_limits<uint32_t>::max(), catchupInfo);
+}
+
 static void
-catchup(Config const& cfg, uint32_t to, uint32_t count)
+writeCatchupInfo(Json::Value const& catchupInfo, std::string const& outputFile)
+{
+    std::string filename = outputFile.empty() ? "-" : outputFile;
+    auto content = catchupInfo.toStyledString();
+
+    if (filename == "-")
+    {
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Catchup info: " << content;
+        LOG(INFO) << "*";
+    }
+    else
+    {
+        std::ofstream out{};
+        out.open(filename);
+        out.write(content.c_str(), content.size());
+        out.close();
+
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Wrote catchup info to " << filename;
+        LOG(INFO) << "*";
+    }
+}
+
+static int
+reportLastHistoryCheckpoint(Config const& cfg, std::string const& outputFile)
 {
     VirtualClock clock(VirtualClock::REAL_TIME);
     Application::pointer app = Application::create(clock, cfg, false);
 
-    if (checkInitialized(app))
+    if (!checkInitialized(app))
     {
-        app->applyCfgCommands();
-        auto done = false;
-        app->getLedgerManager().loadLastKnownLedger(
-            [&done](asio::error_code const& ec) {
-                if (ec)
-                {
-                    throw std::runtime_error(
-                        "Unable to restore last-known ledger state");
-                }
+        return 1;
+    }
 
-                done = true;
-            });
-        while (!done && clock.crank(true))
-            ;
+    auto state = HistoryArchiveState{};
+    auto& wm = app->getWorkManager();
+    auto getHistoryArchiveStateWork =
+        wm.executeWork<GetHistoryArchiveStateWork>(
+            true, "get-history-archive-state-work", state);
 
-        try
-        {
-            app->getLedgerManager().startCatchUp({to, count}, true);
-        }
-        catch (std::invalid_argument const&)
+    auto ok = getHistoryArchiveStateWork->getState() == Work::WORK_SUCCESS;
+    if (ok)
+    {
+        std::string filename = outputFile.empty() ? "-" : outputFile;
+
+        if (filename == "-")
         {
             LOG(INFO) << "*";
-            LOG(INFO) << "* Target ledger " << to
-                      << " is not newer than last closed ledger"
-                      << " - nothing to do";
-            LOG(INFO) << "* If you really want to catchup to " << to
-                      << " run stellar-core with --newdb parameter.";
+            LOG(INFO) << "* Last history checkpoint " << state.toString();
             LOG(INFO) << "*";
-            return;
         }
-
-        auto& io = clock.getIOService();
-        asio::io_service::work mainWork(io);
-        while (!io.stopped())
+        else
         {
-            switch (app->getLedgerManager().getState())
-            {
-            case LedgerManager::LM_BOOTING_STATE:
-            {
-                LOG(INFO) << "*";
-                LOG(INFO) << "* Catchup failed.";
-                LOG(INFO) << "*";
-                app->gracefulStop();
-                break;
-            }
-            case LedgerManager::LM_SYNCED_STATE:
-            {
-                LOG(INFO) << "*";
-                LOG(INFO) << "* Catchup finished.";
-                LOG(INFO) << "*";
-                app->gracefulStop();
-                break;
-            }
-            case LedgerManager::LM_CATCHING_UP_STATE:
-                break;
-            }
-
-            clock.crank();
+            state.save(filename);
+            LOG(INFO) << "*";
+            LOG(INFO) << "* Wrote last history checkpoint " << filename;
+            LOG(INFO) << "*";
         }
     }
-}
+    else
+    {
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Fetching last history checkpoint failed.";
+        LOG(INFO) << "*";
+    }
 
-static void
-catchupAt(Config const& cfg, uint32_t at)
-{
-    catchup(cfg, at, 0);
-}
+    app->gracefulStop();
+    while (clock.crank(true))
+        ;
 
-static void
-catchupComplete(Config const& cfg)
-{
-    catchup(cfg, CatchupConfiguration::CURRENT,
-            std::numeric_limits<uint32_t>::max());
-}
-
-static void
-catchupRecent(Config const& cfg, uint32_t count)
-{
-    catchup(cfg, CatchupConfiguration::CURRENT, count);
-}
-
-static void
-catchupTo(Config const& cfg, uint32_t to)
-{
-    catchup(cfg, to, std::numeric_limits<uint32_t>::max());
+    return ok ? 0 : 1;
 }
 
 static uint32_t
@@ -434,7 +527,6 @@ loadXdr(Config const& cfg, std::string const& bucketFile)
     {
         uint256 zero;
         Bucket bucket(bucketFile, zero);
-        bucket.setRetain(true);
         bucket.apply(app->getDatabase());
     }
     else
@@ -449,7 +541,7 @@ inferQuorumAndWrite(Config const& cfg)
     InferredQuorum iq;
     {
         VirtualClock clock;
-        Application::pointer app = Application::create(clock, cfg);
+        Application::pointer app = Application::create(clock, cfg, false);
         iq = app->getHistoryManager().inferQuorum();
     }
     LOG(INFO) << "Inferred quorum";
@@ -460,23 +552,37 @@ static void
 checkQuorumIntersection(Config const& cfg)
 {
     VirtualClock clock;
-    Application::pointer app = Application::create(clock, cfg);
+    Application::pointer app = Application::create(clock, cfg, false);
     InferredQuorum iq = app->getHistoryManager().inferQuorum();
     iq.checkQuorumIntersection(cfg);
 }
 
 static void
-writeQuorumGraph(Config const& cfg)
+writeQuorumGraph(Config const& cfg, std::string const& outputFile)
 {
     InferredQuorum iq;
     {
         VirtualClock clock;
-        Application::pointer app = Application::create(clock, cfg);
+        Application::pointer app = Application::create(clock, cfg, false);
         iq = app->getHistoryManager().inferQuorum();
     }
-    std::string filename = "quorumgraph.dot";
-    iq.writeQuorumGraph(cfg, filename);
-    LOG(INFO) << "Wrote quorum graph to " << filename;
+    std::string filename = outputFile.empty() ? "-" : outputFile;
+    if (filename == "-")
+    {
+        std::stringstream out;
+        iq.writeQuorumGraph(cfg, out);
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Quorum graph: " << out.str();
+        LOG(INFO) << "*";
+    }
+    else
+    {
+        std::ofstream out(filename);
+        iq.writeQuorumGraph(cfg, out);
+        LOG(INFO) << "*";
+        LOG(INFO) << "* Wrote quorum graph to " << filename;
+        LOG(INFO) << "*";
+    }
 }
 
 static void
@@ -562,6 +668,7 @@ main(int argc, char* const* argv)
         LOG(FATAL) << "Could not initialize crypto";
         return 1;
     }
+    xdr::marshaling_stack_limit = 1000;
 
     std::string cfgFile("stellar-core.cfg");
     std::string command;
@@ -582,7 +689,9 @@ main(int argc, char* const* argv)
     bool graphQuorum = false;
     bool newDB = false;
     bool getOfflineInfo = false;
-    std::string loadXdrBucket = "";
+    auto doReportLastHistoryCheckpoint = false;
+    std::string outputFile;
+    std::string loadXdrBucket;
     std::vector<std::string> newHistories;
     std::vector<std::string> metrics;
 
@@ -670,6 +779,9 @@ main(int argc, char* const* argv)
         case OPT_OFFLINEINFO:
             getOfflineInfo = true;
             break;
+        case OPT_OUTPUT_FILE:
+            outputFile = optarg;
+            break;
         case OPT_LOGLEVEL:
             logLevel = Logging::getLLfromString(std::string(optarg));
             break;
@@ -681,6 +793,9 @@ main(int argc, char* const* argv)
             break;
         case OPT_NEWHIST:
             newHistories.push_back(std::string(optarg));
+            break;
+        case OPT_REPORT_LAST_HISTORY_CHECKPOINT:
+            doReportLastHistoryCheckpoint = true;
             break;
         case OPT_TEST:
         {
@@ -733,32 +848,53 @@ main(int argc, char* const* argv)
 
         if (forceSCP || newDB || getOfflineInfo || !loadXdrBucket.empty() ||
             inferQuorum || graphQuorum || checkQuorum || doCatchupAt ||
-            doCatchupComplete || doCatchupRecent || doCatchupTo)
+            doCatchupComplete || doCatchupRecent || doCatchupTo ||
+            doReportLastHistoryCheckpoint)
         {
+            auto result = 0;
             setNoListen(cfg);
             if (newDB)
                 initializeDatabase(cfg);
-            if (doCatchupAt)
-                catchupAt(cfg, catchupAtTarget);
-            if (doCatchupComplete)
-                catchupComplete(cfg);
-            if (doCatchupRecent)
-                catchupRecent(cfg, catchupRecentCount);
-            if (doCatchupTo)
-                catchupTo(cfg, catchupToTarget);
-            if (forceSCP)
+            if ((result == 0) && (doCatchupAt || doCatchupComplete ||
+                                  doCatchupRecent || doCatchupTo))
+            {
+                Json::Value catchupInfo;
+                VirtualClock clock(VirtualClock::REAL_TIME);
+                auto app = Application::create(clock, cfg, false);
+                // set known cursors before starting maintenance job
+                ExternalQueue ps(*app);
+                ps.setInitialCursors(cfg.KNOWN_CURSORS);
+                app->getMaintainer().start();
+                if (doCatchupAt)
+                    result = catchupAt(app, catchupAtTarget, catchupInfo);
+                if ((result == 0) && doCatchupComplete)
+                    result = catchupComplete(app, catchupInfo);
+                if ((result == 0) && doCatchupRecent)
+                    result =
+                        catchupRecent(app, catchupRecentCount, catchupInfo);
+                if ((result == 0) && doCatchupTo)
+                    result = catchupTo(app, catchupToTarget, catchupInfo);
+                app->gracefulStop();
+                while (app->getClock().crank(true))
+                    ;
+                if (!catchupInfo.isNull())
+                    writeCatchupInfo(catchupInfo, outputFile);
+            }
+            if ((result == 0) && forceSCP)
                 setForceSCPFlag(cfg, *forceSCP);
-            if (getOfflineInfo)
+            if ((result == 0) && getOfflineInfo)
                 showOfflineInfo(cfg);
-            if (!loadXdrBucket.empty())
+            if ((result == 0) && doReportLastHistoryCheckpoint)
+                result = reportLastHistoryCheckpoint(cfg, outputFile);
+            if ((result == 0) && !loadXdrBucket.empty())
                 loadXdr(cfg, loadXdrBucket);
-            if (inferQuorum)
+            if ((result == 0) && inferQuorum)
                 inferQuorumAndWrite(cfg);
-            if (checkQuorum)
+            if ((result == 0) && checkQuorum)
                 checkQuorumIntersection(cfg);
-            if (graphQuorum)
-                writeQuorumGraph(cfg);
-            return 0;
+            if ((result == 0) && graphQuorum)
+                writeQuorumGraph(cfg, outputFile);
+            return result;
         }
         else if (!newHistories.empty())
         {

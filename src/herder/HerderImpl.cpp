@@ -19,6 +19,7 @@
 #include "scp/LocalNode.h"
 #include "scp/Slot.h"
 #include "util/Logging.h"
+#include "util/StatusManager.h"
 #include "util/Timer.h"
 #include "util/make_unique.h"
 
@@ -30,6 +31,7 @@
 #include "xdrpp/marshal.h"
 
 #include <ctime>
+#include <lib/util/format.h>
 
 using namespace std;
 
@@ -70,10 +72,9 @@ HerderImpl::SCPMetrics::SCPMetrics(Application& app)
 HerderImpl::HerderImpl(Application& app)
     : mPendingTransactions(4)
     , mPendingEnvelopes(app, *this)
-    , mHerderSCPDriver(app, *this, mPendingEnvelopes)
+    , mHerderSCPDriver(app, *this, mUpgrades, mPendingEnvelopes)
     , mLastSlotSaved(0)
     , mTrackingTimer(app)
-    , mLastTrigger(app.getClock().now())
     , mTriggerTimer(app)
     , mRebroadcastTimer(app)
     , mApp(app)
@@ -81,7 +82,7 @@ HerderImpl::HerderImpl(Application& app)
     , mSCPMetrics(app)
 {
     Hash hash = getSCP().getLocalNode()->getQuorumSetHash();
-    mPendingEnvelopes.addSCPQuorumSet(hash, 0,
+    mPendingEnvelopes.addSCPQuorumSet(hash,
                                       getSCP().getLocalNode()->getQuorumSet());
 }
 
@@ -125,7 +126,8 @@ HerderImpl::bootstrap()
     mLedgerManager.setState(LedgerManager::LM_SYNCED_STATE);
     mHerderSCPDriver.bootstrap();
 
-    mLastTrigger = mApp.getClock().now() - Herder::EXP_LEDGER_TIMESPAN_SECONDS;
+    mTriggerTimer.expires_at(mApp.getClock().now() -
+                             Herder::EXP_LEDGER_TIMESPAN_SECONDS);
     ledgerClosed();
 }
 
@@ -169,6 +171,8 @@ void
 HerderImpl::valueExternalized(uint64 slotIndex, StellarValue const& value)
 {
     updateSCPCounters();
+
+    // called both here and at the end (this one is in case of an exception)
     trackingHeartBeat();
 
     if (Logging::logDebug("Herder"))
@@ -187,6 +191,17 @@ HerderImpl::valueExternalized(uint64 slotIndex, StellarValue const& value)
         static_cast<uint32>(slotIndex),
         getSCP().getExternalizingState(slotIndex));
 
+    // reflect upgrades with the ones included in this SCP round
+    {
+        bool updated;
+        auto newUpgrades = mUpgrades.removeUpgrades(
+            value.upgrades.begin(), value.upgrades.end(), updated);
+        if (updated)
+        {
+            setUpgrades(newUpgrades);
+        }
+    }
+
     // tell the LedgerManager that this value got externalized
     // LedgerManager will perform the proper action based on its internal
     // state: apply, trigger catchup, etc
@@ -204,6 +219,10 @@ HerderImpl::valueExternalized(uint64 slotIndex, StellarValue const& value)
     }
 
     ledgerClosed();
+
+    // heart beat *after* doing all the work (ensures that we do not include
+    // the overhead of externalization in the way we track SCP)
+    trackingHeartBeat();
 }
 
 void
@@ -250,10 +269,10 @@ HerderImpl::emitEnvelope(SCPEnvelope const& envelope)
     uint64 slotIndex = envelope.statement.slotIndex;
 
     if (Logging::logDebug("Herder"))
-        CLOG(DEBUG, "Herder") << "emitEnvelope"
-                              << " s:" << envelope.statement.pledges.type()
-                              << " i:" << slotIndex
-                              << " a:" << mApp.getStateHuman();
+        CLOG(DEBUG, "Herder")
+            << "emitEnvelope"
+            << " s:" << envelope.statement.pledges.type() << " i:" << slotIndex
+            << " a:" << mApp.getStateHuman();
 
     persistSCPState(slotIndex);
 
@@ -403,6 +422,17 @@ HerderImpl::recvSCPEnvelope(SCPEnvelope const& envelope)
     return status;
 }
 
+Herder::EnvelopeStatus
+HerderImpl::recvSCPEnvelope(SCPEnvelope const& envelope,
+                            const SCPQuorumSet& qset, TxSetFrame txset)
+{
+    mPendingEnvelopes.addTxSet(txset.getContentsHash(),
+                               envelope.statement.slotIndex,
+                               std::make_shared<TxSetFrame>(txset));
+    mPendingEnvelopes.addSCPQuorumSet(sha256(xdr::xdr_to_opaque(qset)), qset);
+    return recvSCPEnvelope(envelope);
+}
+
 void
 HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, PeerPtr peer)
 {
@@ -427,8 +457,8 @@ HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, PeerPtr peer)
 
         if (envelopes.size() != 0)
         {
-            CLOG(DEBUG, "Herder") << "Send state " << envelopes.size()
-                                  << " for ledger " << seq;
+            CLOG(DEBUG, "Herder")
+                << "Send state " << envelopes.size() << " for ledger " << seq;
 
             for (auto const& e : envelopes)
             {
@@ -544,13 +574,22 @@ HerderImpl::ledgerClosed()
     }
 
     auto now = mApp.getClock().now();
-    if ((now - mLastTrigger) < seconds)
+    auto lastScheduledTrigger = mTriggerTimer.expiry_time();
+    if (now <= lastScheduledTrigger)
     {
-        auto timeout = seconds - (now - mLastTrigger);
+        // we externalized before triggering
+        mTriggerTimer.expires_from_now(seconds);
+    }
+    else if ((now - lastScheduledTrigger) < seconds)
+    {
+        // we closed faster than the target round time, so schedule a trigger
+        // such that we stay on course
+        auto timeout = seconds - (now - lastScheduledTrigger);
         mTriggerTimer.expires_from_now(timeout);
     }
     else
     {
+        // round took a long time to close
         mTriggerTimer.expires_from_now(std::chrono::nanoseconds(0));
     }
 
@@ -729,13 +768,10 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger)
         return;
     }
 
-    // We store at which time we triggered consensus
-    mLastTrigger = mApp.getClock().now();
-
     // We pick as next close time the current time unless it's before the last
     // close time. We don't know how much time it will take to reach consensus
     // so this is the most appropriate value to use as closeTime.
-    uint64_t nextCloseTime = VirtualClock::to_time_t(mLastTrigger);
+    uint64_t nextCloseTime = VirtualClock::to_time_t(mApp.getClock().now());
     if (nextCloseTime <= lcl.header.scpValue.closeTime)
     {
         nextCloseTime = lcl.header.scpValue.closeTime + 1;
@@ -745,17 +781,16 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger)
                                   0);
 
     // see if we need to include some upgrades
-    auto upgrades = prepareUpgrades(lcl.header);
-
+    auto upgrades = mUpgrades.createUpgradesFor(lcl.header);
     for (auto const& upgrade : upgrades)
     {
         Value v(xdr::xdr_to_opaque(upgrade));
         if (v.size() >= UpgradeType::max_size())
         {
-            CLOG(ERROR, "Herder") << "HerderImpl::triggerNextLedger"
-                                  << " exceeded size for upgrade step (got "
-                                  << v.size() << " ) for upgrade type "
-                                  << std::to_string(upgrade.type());
+            CLOG(ERROR, "Herder")
+                << "HerderImpl::triggerNextLedger"
+                << " exceeded size for upgrade step (got " << v.size()
+                << " ) for upgrade type " << std::to_string(upgrade.type());
         }
         else
         {
@@ -767,38 +802,38 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger)
                               lcl.header.scpValue);
 }
 
-std::vector<LedgerUpgrade>
-HerderImpl::prepareUpgrades(const LedgerHeader& header) const
+void
+HerderImpl::setUpgrades(Upgrades::UpgradeParameters const& upgrades)
 {
-    auto result = std::vector<LedgerUpgrade>{};
+    mUpgrades.setParameters(upgrades, mApp.getConfig());
+    persistUpgrades();
 
-    if (header.ledgerVersion != mApp.getConfig().LEDGER_PROTOCOL_VERSION)
+    auto desc = mUpgrades.toString();
+
+    if (!desc.empty())
     {
-        auto timeForUpgrade =
-            !mApp.getConfig().PREFERRED_UPGRADE_DATETIME ||
-            VirtualClock::tmToPoint(
-                *mApp.getConfig().PREFERRED_UPGRADE_DATETIME) <=
-                mApp.getClock().now();
-        if (timeForUpgrade)
+        auto message = fmt::format("Armed with network upgrades: {}", desc);
+        auto prev = mApp.getStatusManager().getStatusMessage(
+            StatusCategory::REQUIRES_UPGRADES);
+        if (prev != message)
         {
-            result.emplace_back(LEDGER_UPGRADE_VERSION);
-            result.back().newLedgerVersion() =
-                mApp.getConfig().LEDGER_PROTOCOL_VERSION;
+            CLOG(INFO, "Herder") << message;
+            mApp.getStatusManager().setStatusMessage(
+                StatusCategory::REQUIRES_UPGRADES, message);
         }
     }
-    if (header.baseFee != mApp.getConfig().DESIRED_BASE_FEE)
+    else
     {
-        result.emplace_back(LEDGER_UPGRADE_BASE_FEE);
-        result.back().newBaseFee() = mApp.getConfig().DESIRED_BASE_FEE;
+        CLOG(INFO, "Herder") << "Network upgrades cleared";
+        mApp.getStatusManager().removeStatusMessage(
+            StatusCategory::REQUIRES_UPGRADES);
     }
-    if (header.maxTxSetSize != mApp.getConfig().DESIRED_MAX_TX_PER_LEDGER)
-    {
-        result.emplace_back(LEDGER_UPGRADE_MAX_TX_SET_SIZE);
-        result.back().newMaxTxSetSize() =
-            mApp.getConfig().DESIRED_MAX_TX_PER_LEDGER;
-    }
+}
 
-    return result;
+std::string
+HerderImpl::getUpgradesJson()
+{
+    return mUpgrades.getParameters().toJson();
 }
 
 bool
@@ -837,7 +872,7 @@ void
 HerderImpl::dumpInfo(Json::Value& ret, size_t limit)
 {
     ret["you"] =
-        mApp.getConfig().toStrKey(getSCP().getSecretKey().getPublicKey());
+        mApp.getConfig().toStrKey(mApp.getConfig().NODE_SEED.getPublicKey());
 
     getSCP().dumpInfo(ret, limit);
 
@@ -949,7 +984,7 @@ HerderImpl::restoreSCPState()
         for (auto const& qset : latestQSets)
         {
             Hash hash = sha256(xdr::xdr_to_opaque(qset));
-            mPendingEnvelopes.addSCPQuorumSet(hash, 0, qset);
+            mPendingEnvelopes.addSCPQuorumSet(hash, qset);
         }
         for (auto const& e : latestEnvs)
         {
@@ -970,6 +1005,42 @@ HerderImpl::restoreSCPState()
                                 "proceeding without them : "
                              << e.what();
     }
+}
+
+void
+HerderImpl::persistUpgrades()
+{
+    auto s = mUpgrades.getParameters().toJson();
+    mApp.getPersistentState().setState(PersistentState::kLedgerUpgrades, s);
+}
+
+void
+HerderImpl::restoreUpgrades()
+{
+    std::string s =
+        mApp.getPersistentState().getState(PersistentState::kLedgerUpgrades);
+    if (!s.empty())
+    {
+        Upgrades::UpgradeParameters p;
+        p.fromJson(s);
+        try
+        {
+            // use common code to set status
+            setUpgrades(p);
+        }
+        catch (std::exception e)
+        {
+            CLOG(INFO, "Herder") << "Error restoring upgrades '" << e.what()
+                                 << "' with upgrades '" << s << "'";
+        }
+    }
+}
+
+void
+HerderImpl::restoreState()
+{
+    restoreSCPState();
+    restoreUpgrades();
 }
 
 void

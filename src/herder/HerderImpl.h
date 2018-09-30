@@ -7,6 +7,7 @@
 #include "PendingEnvelopes.h"
 #include "herder/Herder.h"
 #include "herder/HerderSCPDriver.h"
+#include "herder/Upgrades.h"
 #include "util/Timer.h"
 #include <deque>
 #include <memory>
@@ -46,8 +47,7 @@ class HerderImpl : public Herder
     // Bootstraps the HerderImpl if we're creating a new Network
     void bootstrap() override;
 
-    // restores SCP state based on the last messages saved on disk
-    void restoreSCPState() override;
+    void restoreState() override;
 
     SCP& getSCP();
     HerderSCPDriver&
@@ -62,6 +62,9 @@ class HerderImpl : public Herder
     TransactionSubmitStatus recvTransaction(TransactionFramePtr tx) override;
 
     EnvelopeStatus recvSCPEnvelope(SCPEnvelope const& envelope) override;
+    EnvelopeStatus recvSCPEnvelope(SCPEnvelope const& envelope,
+                                   const SCPQuorumSet& qset,
+                                   TxSetFrame txset) override;
 
     void sendSCPStateToPeer(uint32 ledgerSeq, PeerPtr peer) override;
 
@@ -79,6 +82,9 @@ class HerderImpl : public Herder
     SequenceNumber getMaxSeqInPendingTxs(AccountID const&) override;
 
     void triggerNextLedger(uint32_t ledgerSeqToTrigger) override;
+
+    void setUpgrades(Upgrades::UpgradeParameters const& upgrades) override;
+    std::string getUpgradesJson() override;
 
     bool resolveNodeID(std::string const& s, PublicKey& retKey) override;
 
@@ -118,6 +124,7 @@ class HerderImpl : public Herder
     updatePendingTransactions(std::vector<TransactionFramePtr> const& applied);
 
     PendingEnvelopes mPendingEnvelopes;
+    Upgrades mUpgrades;
     HerderSCPDriver mHerderSCPDriver;
 
     void herderOutOfSync();
@@ -131,17 +138,18 @@ class HerderImpl : public Herder
 
     // saves the SCP messages that the instance sent out last
     void persistSCPState(uint64 slot);
+    // restores SCP state based on the last messages saved on disk
+    void restoreSCPState();
 
-    // create upgrades for given ledger
-    std::vector<LedgerUpgrade>
-    prepareUpgrades(const LedgerHeader& header) const;
+    // saves upgrade parameters
+    void persistUpgrades();
+    void restoreUpgrades();
 
     // called every time we get ledger externalized
     // ensures that if we don't hear from the network, we throw the herder into
     // indeterminate mode
     void trackingHeartBeat();
 
-    VirtualClock::time_point mLastTrigger;
     VirtualTimer mTriggerTimer;
 
     VirtualTimer mRebroadcastTimer;

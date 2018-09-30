@@ -8,6 +8,7 @@
 #include "crypto/SHA.h"
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
+#include "ledger/LedgerRange.h"
 #include "transactions/ManageOfferOpFrame.h"
 #include "util/types.h"
 
@@ -115,28 +116,6 @@ uint32
 OfferFrame::getFlags() const
 {
     return mOffer.flags;
-}
-
-bool
-OfferFrame::isValid(LedgerEntry const& le)
-{
-    bool res = (le.lastModifiedLedgerSeq <= INT32_MAX);
-    OfferEntry const& oe = le.data.offer();
-
-    res = res && (oe.offerID <= INT64_MAX);
-    res = res && (oe.amount > 0);
-    res = res && (oe.price.n > 0);
-    res = res && (oe.price.d >= 1);
-    res = res && isAssetValid(oe.selling);
-    res = res && isAssetValid(oe.buying);
-    res = res && ((oe.flags & ~MASK_OFFERENTRY_FLAGS) == 0);
-    return res;
-}
-
-bool
-OfferFrame::isValid() const
-{
-    return isValid(mEntry);
 }
 
 OfferFrame::pointer
@@ -254,11 +233,6 @@ OfferFrame::loadOffers(StatementContext& prep,
                 strToAssetCode(oe.buying.alphaNum4().assetCode,
                                buyingAssetCode);
             }
-        }
-
-        if (!isValid(le))
-        {
-            throw std::runtime_error("Invalid offer");
         }
 
         offerProcessor(le);
@@ -401,6 +375,36 @@ OfferFrame::countObjects(soci::session& sess)
     return count;
 }
 
+uint64_t
+OfferFrame::countObjects(soci::session& sess, LedgerRange const& ledgers)
+{
+    uint64_t count = 0;
+    sess << "SELECT COUNT(*) FROM offers"
+            " WHERE lastmodified >= :v1 AND lastmodified <= :v2;",
+        into(count), use(ledgers.first()), use(ledgers.last());
+    return count;
+}
+
+void
+OfferFrame::deleteOffersModifiedOnOrAfterLedger(Database& db,
+                                                uint32_t oldestLedger)
+{
+    db.getEntryCache().erase_if(
+        [oldestLedger](std::shared_ptr<LedgerEntry const> le) -> bool {
+            return le && le->data.type() == OFFER &&
+                   le->lastModifiedLedgerSeq >= oldestLedger;
+        });
+
+    {
+        auto prep = db.getPreparedStatement(
+            "DELETE FROM offers WHERE lastmodified >= :v1");
+        auto& st = prep.statement();
+        st.exchange(soci::use(oldestLedger));
+        st.define_and_bind();
+        st.execute(true);
+    }
+}
+
 void
 OfferFrame::storeDelete(LedgerDelta& delta, Database& db) const
 {
@@ -441,11 +445,6 @@ void
 OfferFrame::storeUpdateHelper(LedgerDelta& delta, Database& db, bool insert)
 {
     touch(delta);
-
-    if (!isValid())
-    {
-        throw std::runtime_error("Invalid offer");
-    }
 
     std::string actIDStrKey = KeyUtils::toStrKey(mOffer.sellerID);
 

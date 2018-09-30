@@ -26,13 +26,16 @@ class TCPPeer : public Peer
     typedef asio::buffered_stream<asio::ip::tcp::socket> SocketType;
 
   private:
-    std::string mIP;
     std::shared_ptr<SocketType> mSocket;
     std::vector<uint8_t> mIncomingHeader;
     std::vector<uint8_t> mIncomingBody;
 
     std::queue<std::shared_ptr<xdr::msg_ptr>> mWriteQueue;
     bool mWriting{false};
+    bool mDelayedShutdown{false};
+    bool mShutdownScheduled{false};
+
+    PeerBareAddress makeAddress(int remoteListeningPort) const override;
 
     void recvMessage();
     void sendMessage(xdr::msg_ptr&& xdrBytes) override;
@@ -49,6 +52,7 @@ class TCPPeer : public Peer
                            std::size_t bytes_transferred) override;
     void readBodyHandler(asio::error_code const& error,
                          std::size_t bytes_transferred) override;
+    void shutdown();
 
   public:
     typedef std::shared_ptr<TCPPeer> pointer;
@@ -59,13 +63,11 @@ class TCPPeer : public Peer
                                                  // `initiate` or
                                                  // `accept` instead
 
-    static pointer initiate(Application& app, std::string const& ip,
-                            unsigned short port);
+    static pointer initiate(Application& app, PeerBareAddress const& address);
     static pointer accept(Application& app, std::shared_ptr<SocketType> socket);
 
     virtual ~TCPPeer();
 
-    virtual void drop() override;
-    virtual std::string getIP() override;
+    virtual void drop(bool force = true) override;
 };
 }

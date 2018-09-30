@@ -7,6 +7,7 @@
 #include "main/Application.h"
 #include "main/Config.h"
 #include "overlay/OverlayManager.h"
+#include "overlay/PeerBareAddress.h"
 #include "overlay/PeerDoor.h"
 #include "simulation/Simulation.h"
 #include "test/test.h"
@@ -28,12 +29,12 @@ TEST_CASE("TCPPeer can communicate", "[overlay]")
     SCPQuorumSet n0_qset;
     n0_qset.threshold = 1;
     n0_qset.validators.push_back(v10SecretKey.getPublicKey());
-    auto n0 = s->addNode(v10SecretKey, n0_qset, s->getClock());
+    auto n0 = s->addNode(v10SecretKey, n0_qset);
 
     SCPQuorumSet n1_qset;
     n1_qset.threshold = 1;
     n1_qset.validators.push_back(v11SecretKey.getPublicKey());
-    auto n1 = s->addNode(v11SecretKey, n1_qset, s->getClock());
+    auto n1 = s->addNode(v11SecretKey, n1_qset);
 
     s->addPendingConnection(v10SecretKey.getPublicKey(),
                             v11SecretKey.getPublicKey());
@@ -41,10 +42,10 @@ TEST_CASE("TCPPeer can communicate", "[overlay]")
     s->crankForAtLeast(std::chrono::seconds(1), false);
 
     auto p0 = n0->getOverlayManager().getConnectedPeer(
-        "127.0.0.1", n1->getConfig().PEER_PORT);
+        PeerBareAddress{"127.0.0.1", n1->getConfig().PEER_PORT});
 
     auto p1 = n1->getOverlayManager().getConnectedPeer(
-        "127.0.0.1", n0->getConfig().PEER_PORT);
+        PeerBareAddress{"127.0.0.1", n0->getConfig().PEER_PORT});
 
     REQUIRE(p0);
     REQUIRE(p1);

@@ -86,8 +86,7 @@ class LedgerManagerImpl : public LedgerManager
     uint64_t secondsSinceLastLedgerClose() const override;
     void syncMetrics() override;
 
-    void startNewLedger(int64_t balance, uint32_t baseFee, uint32_t baseReserve,
-                        uint32_t maxTxSetSize);
+    void startNewLedger(LedgerHeader genesisLedger);
     void startNewLedger() override;
     void loadLastKnownLedger(
         std::function<void(asio::error_code const& ec)> handler) override;
@@ -102,11 +101,12 @@ class LedgerManagerImpl : public LedgerManager
     void startCatchUp(CatchupConfiguration configuration,
                       bool manualCatchup) override;
 
-    HistoryManager::VerifyHashStatus
+    HistoryManager::LedgerVerificationStatus
     verifyCatchupCandidate(LedgerHeaderHistoryEntry const&,
                            bool manualCatchup) const override;
     void closeLedger(LedgerCloseData const& ledgerData) override;
-    void deleteOldEntries(Database& db, uint32_t ledgerSeq) override;
+    void deleteOldEntries(Database& db, uint32_t ledgerSeq,
+                          uint32_t count) override;
     void checkDbState() override;
 };
 }

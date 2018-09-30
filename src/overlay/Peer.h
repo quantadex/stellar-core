@@ -6,6 +6,7 @@
 
 #include "util/asio.h"
 #include "database/Database.h"
+#include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
 #include "util/NonCopyable.h"
 #include "util/Timer.h"
@@ -70,7 +71,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     std::string mRemoteVersion;
     uint32_t mRemoteOverlayMinVersion;
     uint32_t mRemoteOverlayVersion;
-    unsigned short mRemoteListeningPort;
+    PeerBareAddress mAddress;
 
     VirtualTimer mIdleTimer;
     VirtualClock::time_point mLastRead;
@@ -129,7 +130,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     medida::Meter& mDropInRecvHelloCertMeter;
     medida::Meter& mDropInRecvHelloBanMeter;
     medida::Meter& mDropInRecvHelloNetMeter;
-    medida::Meter& mDropInRecvHelloPortMeter;
+    medida::Meter& mDropInRecvHelloAddressMeter;
     medida::Meter& mDropInRecvAuthUnexpectedMeter;
     medida::Meter& mDropInRecvAuthRejectMeter;
     medida::Meter& mDropInRecvAuthInvalidPeerMeter;
@@ -177,6 +178,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     }
 
     virtual AuthCert getAuthCert();
+    virtual PeerBareAddress makeAddress(int remoteListeningPort) const = 0;
 
     void startIdleTimer();
     void idleTimerExpired(asio::error_code const& error);
@@ -234,11 +236,12 @@ class Peer : public std::enable_shared_from_this<Peer>,
         return mRemoteOverlayVersion;
     }
 
-    unsigned short
-    getRemoteListeningPort()
+    PeerBareAddress const&
+    getAddress()
     {
-        return mRemoteListeningPort;
+        return mAddress;
     }
+
     NodeID
     getPeerID()
     {
@@ -267,8 +270,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
     }
 
     void drop(ErrorCode err, std::string const& msg);
-    virtual void drop() = 0;
-    virtual std::string getIP() = 0;
+
+    // If force is true, it will drop immediately without waiting for all
+    // outgoing messages to be sent
+    virtual void drop(bool force = true) = 0;
     virtual ~Peer()
     {
     }

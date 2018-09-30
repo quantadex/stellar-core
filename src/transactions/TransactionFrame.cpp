@@ -9,7 +9,9 @@
 #include "crypto/SHA.h"
 #include "crypto/SignerKey.h"
 #include "database/Database.h"
+#include "database/DatabaseUtils.h"
 #include "herder/TxSetFrame.h"
+#include "invariant/InvariantManager.h"
 #include "ledger/LedgerDelta.h"
 #include "main/Application.h"
 #include "transactions/SignatureChecker.h"
@@ -296,8 +298,16 @@ TransactionFrame::commonValid(SignatureChecker& signatureChecker,
         return false;
     }
 
+    // if we are in applying mode fee was already deduced from signing account
+    // balance, if not, we need to check if after that deduction this account
+    // will still have minimum balance
+    auto balanceAfter =
+        (applying && (app.getLedgerManager().getCurrentLedgerVersion() > 8))
+            ? mSigningAccount->getAccount().balance
+            : mSigningAccount->getAccount().balance - mEnvelope.tx.fee;
+
     // don't let the account go below the reserve
-    if (mSigningAccount->getAccount().balance - mEnvelope.tx.fee <
+    if (balanceAfter <
         mSigningAccount->getMinimumBalance(app.getLedgerManager()))
     {
         app.getMetrics()
@@ -508,6 +518,11 @@ TransactionFrame::apply(LedgerDelta& delta, TransactionMeta& meta,
             if (!txRes)
             {
                 errorEncountered = true;
+            }
+            if (!errorEncountered)
+            {
+                app.getInvariantManager().checkOnOperationApply(
+                    op->getOperation(), op->getResult(), opDelta);
             }
             meta.operations().emplace_back(opDelta.getChanges());
             opDelta.commit();
@@ -824,10 +839,12 @@ TransactionFrame::dropAll(Database& db)
 }
 
 void
-TransactionFrame::deleteOldEntries(Database& db, uint32_t ledgerSeq)
+TransactionFrame::deleteOldEntries(Database& db, uint32_t ledgerSeq,
+                                   uint32_t count)
 {
-    db.getSession() << "DELETE FROM txhistory WHERE ledgerseq <= " << ledgerSeq;
-    db.getSession() << "DELETE FROM txfeehistory WHERE ledgerseq <= "
-                    << ledgerSeq;
+    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+                                          "txhistory", "ledgerseq");
+    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+                                          "txfeehistory", "ledgerseq");
 }
 }
