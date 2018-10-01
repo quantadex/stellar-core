@@ -377,7 +377,7 @@ SettlementOpFrame::doCheckValid(Application& app)
             innerResult().codesVec()[ind++] = SETTLEMENT_CROSS_SELF;
             continue;
         }
-        ++ind;
+        innerResult().codesVec()[ind++] = SETTLEMENT_SUCCESS;
     }
     return true;
 }
