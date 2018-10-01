@@ -119,14 +119,37 @@ PathPaymentOpFrame::doApply(Application& app, LedgerDelta& delta,
             destLine = tlI.first;
         }
 
+
+        // auto-create new trust lines
         if (!destLine)
         {
-            app.getMetrics()
-                .NewMeter({"op-path-payment", "failure", "no-trust"},
-                          "operation")
-                .Mark();
-            innerResult().code(PATH_PAYMENT_NO_TRUST);
-            return false;
+            destLine = std::make_shared<TrustFrame>();
+            auto& tl = destLine->getTrustLine();
+            tl.accountID = mPathPayment.destination;
+            tl.asset = curB;
+            tl.limit = INT64_MAX;
+            tl.balance = 0;
+            destLine->setAuthorized(true);
+
+            if (!destination->addNumEntries(1, ledgerManager))
+            {
+                app.getMetrics()
+                    .NewMeter({"op-change-trust", "failure", "low-reserve"},
+                              "operation")
+                    .Mark();
+                innerResult().code(PATH_PAYMENT_NO_ISSUER);
+                return false;
+            }
+
+            destination->storeChange(delta, db);
+            destLine->storeAdd(delta, db);
+
+            // app.getMetrics()
+            //     .NewMeter({"op-path-payment", "failure", "no-trust"},
+            //               "operation")
+            //     .Mark();
+            // innerResult().code(PATH_PAYMENT_NO_TRUST);
+            // return false;
         }
 
         if (!destLine->isAuthorized())
