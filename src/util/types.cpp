@@ -83,7 +83,10 @@ isAssetValid(Asset const& cur)
             {
                 if (b > 0x7F || !std::isalnum((char)b, cLocale))
                 {
-                    return false;
+                    if (b != ',')
+                    {
+                        return false;
+                    }
                 }
                 onechar = true;
             }
@@ -111,7 +114,10 @@ isAssetValid(Asset const& cur)
             {
                 if (b > 0x7F || !std::isalnum((char)b, cLocale))
                 {
-                    return false;
+                    if (b != ',') 
+                    {
+                        return false;
+                    }
                 }
                 charcount++;
             }
