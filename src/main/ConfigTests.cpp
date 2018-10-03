@@ -25,11 +25,12 @@ TEST_CASE("resolve node id", "[config]")
 {
     auto cfg = getTestConfig(0);
     auto validator1Key =
-        std::string{"GDKXE2OZMJIPOSLNA6N6F2BVCI3O777I2OOC4BV7VOYUEHYX7RTRYA7Y"};
+         std::string{"QAYR3BKOWKO7ITYDLBWNERKMW56MLCQYGMOIT6I2F744W4VH2TAUQZ4P"};
     auto validator2Key =
-        std::string{"GCUCJTIYXSOXKBSNFGNFWW5MUQ54HKRPGJUTQFJ5RQXZXNOLNXYDHRAP"};
+         std::string{"QB72TLJLZ4VUGTCJAWRGP7RZ47DPT6OPWYCFB6MF3NGSJINBAO4ZNDSA"};
     auto validator3Key =
-        std::string{"GC2V2EFSXN6SQTWVYA5EPJPBWWIMSD2XQNKUOHGEKB535AQE2I6IXV2Z"};
+         std::string{"QDN5G627L645Y4URHB32TAFTK5NUFZXI53YYRI4WFGPEAMWADMF3AEAN"};
+
 
     cfg.VALIDATOR_NAMES.emplace(std::make_pair(validator1Key, "core-testnet1"));
     cfg.VALIDATOR_NAMES.emplace(std::make_pair(validator2Key, "core-testnet2"));
@@ -56,7 +57,7 @@ TEST_CASE("resolve node id", "[config]")
     SECTION("unique uppercase abbrevated id")
     {
         auto publicKey = PublicKey{};
-        auto result = cfg.resolveNodeID("@GD", publicKey);
+        auto result = cfg.resolveNodeID("@QA", publicKey);
         REQUIRE(result);
         REQUIRE(keyMatches(publicKey, {validator1Key}));
     }
@@ -64,14 +65,14 @@ TEST_CASE("resolve node id", "[config]")
     SECTION("unique lowercase abbrevated id")
     {
         auto publicKey = PublicKey{};
-        auto result = cfg.resolveNodeID("@gd", publicKey);
+        auto result = cfg.resolveNodeID("@qa", publicKey);
         REQUIRE(!result);
     }
 
     SECTION("non unique uppercase abbrevated id")
     {
         auto publicKey = PublicKey{};
-        auto result = cfg.resolveNodeID("@GC", publicKey);
+        auto result = cfg.resolveNodeID("@QB", publicKey);
         REQUIRE(result);
         REQUIRE(keyMatches(publicKey, {validator2Key, validator3Key}));
     }
@@ -102,7 +103,7 @@ TEST_CASE("resolve node id", "[config]")
     {
         auto publicKey = PublicKey{};
         auto result = cfg.resolveNodeID(
-            "GDKXE2OZMJIPOSLNA6N6F2BVCI3O777I2OOC4BV7VOYUEHYX7RTRYA7Y",
+            "QAYR3BKOWKO7ITYDLBWNERKMW56MLCQYGMOIT6I2F744W4VH2TAUQZ4P",
             publicKey);
         REQUIRE(result);
         REQUIRE(keyMatches(publicKey, {validator1Key}));
@@ -111,23 +112,28 @@ TEST_CASE("resolve node id", "[config]")
     SECTION("abbrevated node id without prefix")
     {
         auto publicKey = PublicKey{};
-        REQUIRE(!cfg.resolveNodeID("GDKXE2OZMJIPOSLNA6N6F2BVCI3O7", publicKey));
+        REQUIRE(!cfg.resolveNodeID("QAYR3BKOWKO7ITYDLBWNERKMW56MLCQYGMOIT6I2F744W4VH2", publicKey));
     }
 
     SECTION("existing lowercase full node id")
     {
         auto publicKey = PublicKey{};
         REQUIRE(!cfg.resolveNodeID(
-            "gdkxe2ozmjiposlna6n6f2bvci3o777i2ooc4bv7voyuehyx7rtrya7y",
+            "qayr3bkowko7itydlbwnerkmw56mlcqygmoit6i2f744w4vh2",
             publicKey));
     }
 
     SECTION("non existing full node id")
     {
         auto publicKey = PublicKey{};
-        REQUIRE(!cfg.resolveNodeID(
-            "SDTTOKJOEJXDBLATFZNTQRVA5MSCECMPOPC7CCCGL6AE5DKA7YCBJYJQ",
-            publicKey));
+        auto result = cfg.resolveNodeID(
+            "QD4VGM3PPWHULRA5PZQ2OLZJKDWL7PGZY6AWLCBWVSWIU6AFSXHTWK3L",
+            publicKey);
+        REQUIRE(result); // valid public key, but not in the config
+        REQUIRE(!keyMatches(publicKey, {validator1Key, validator2Key, validator3Key}));
+        // REQUIRE(!cfg.resolveNodeID(
+        //     "QD4VGM3PPWHULRA5PZQ2OLZJKDWL7PGZY6AWLCBWVSWIU6AFSXHTWK3L",
+        //     publicKey));
     }
 
     SECTION("invalid key type")
@@ -147,7 +153,7 @@ TEST_CASE("load example configs", "[config]")
                                           "stellar-core_testnet.cfg"};
     for (auto const& fn : testFiles)
     {
-        std::string fnPath = "testdata/";
+        std::string fnPath = "./testdata/"; 
         fnPath += fn;
         SECTION("load config " + fnPath)
         {

@@ -59,6 +59,9 @@ assetToString(const Asset& asset)
     case stellar::ASSET_TYPE_CREDIT_ALPHANUM4:
         assetCodeToStr(asset.alphaNum4().assetCode, r);
         break;
+    case stellar::ASSET_TYPE_CREDIT_ALPHANUM64:
+        assetCodeToStr(asset.alphaNum64().assetCode, r);
+        break;
     case stellar::ASSET_TYPE_CREDIT_ALPHANUM12:
         assetCodeToStr(asset.alphaNum12().assetCode, r);
         break;
@@ -439,25 +442,37 @@ TEST_CASE("pathpayment", "[tx][pathpayment]")
         auto market = TestMarket{*app};
         auto source = root.create("source", minBalance1);
         auto noDestinationTrust =
-            root.create("no-destination-trust", minBalance);
+            root.create("no-destination-trust", minBalance2);
         source.changeTrust(idr, 20);
         gateway.pay(source, idr, 10);
         for_all_versions(*app, [&] {
-            REQUIRE_THROWS_AS(
-                gateway.pay(noDestinationTrust, idr, 1, idr, 1, {}),
-                ex_PATH_PAYMENT_NO_TRUST);
-            // clang-format off
+            // trustline auto-created, so the test now succeeds.  
+            // The initial balance of the noDestinationTrust increased
+            // accordingly
+            gateway.pay(noDestinationTrust, idr, 1, idr, 1, {});
             market.requireBalances(
                 {{source, {{xlm, minBalance1 - txfee}, {idr, 10}, {usd, 0}}},
-                 {noDestinationTrust, {{xlm, minBalance}, {idr, 0}, {usd, 0}}}});
-            // clang-format on
-            REQUIRE_THROWS_AS(
-                source.pay(noDestinationTrust, idr, 1, idr, 1, {}),
-                ex_PATH_PAYMENT_NO_TRUST);
-            // clang-format off
+                 {noDestinationTrust, {{xlm, minBalance2}, {idr, 1}, {usd, 0}}}});
+
+            source.pay(noDestinationTrust, idr, 1, idr, 1, {});  
             market.requireBalances(
-                {{source, {{xlm, minBalance1 - 2 * txfee}, {idr, 10}, {usd, 0}}},
-                 {noDestinationTrust, {{xlm, minBalance}, {idr, 0}, {usd, 0}}}});
+                {{source, {{xlm, minBalance1 - 2 * txfee}, {idr, 9}, {usd, 0}}},
+                 {noDestinationTrust, {{xlm, minBalance2}, {idr, 2}, {usd, 0}}}});
+            // REQUIRE_THROWS_AS(
+            //     gateway.pay(noDestinationTrust, idr, 1, idr, 1, {}),
+            //     ex_PATH_PAYMENT_NO_TRUST);
+            // // clang-format off
+            // market.requireBalances(
+            //     {{source, {{xlm, minBalance1 - txfee}, {idr, 10}, {usd, 0}}},
+            //      {noDestinationTrust, {{xlm, minBalance}, {idr, 0}, {usd, 0}}}});
+            // // clang-format on
+            // REQUIRE_THROWS_AS(
+            //     source.pay(noDestinationTrust, idr, 1, idr, 1, {}),
+            //     ex_PATH_PAYMENT_NO_TRUST);
+            // // clang-format off
+            // market.requireBalances(
+            //     {{source, {{xlm, minBalance1 - 2 * txfee}, {idr, 10}, {usd, 0}}},
+            //      {noDestinationTrust, {{xlm, minBalance}, {idr, 0}, {usd, 0}}}});
             // clang-format on
         });
     }

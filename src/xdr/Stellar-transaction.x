@@ -183,6 +183,10 @@ struct AllowTrustOp
     case ASSET_TYPE_CREDIT_ALPHANUM12:
         opaque assetCode12[12];
 
+    // the future is now 
+    case ASSET_TYPE_CREDIT_ALPHANUM64:
+        opaque assetCode64[64];
+
         // add other asset types here in the future
     }
     asset;

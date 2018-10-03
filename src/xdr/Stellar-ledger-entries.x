@@ -18,7 +18,8 @@ enum AssetType
 {
     ASSET_TYPE_NATIVE = 0,
     ASSET_TYPE_CREDIT_ALPHANUM4 = 1,
-    ASSET_TYPE_CREDIT_ALPHANUM12 = 2
+    ASSET_TYPE_CREDIT_ALPHANUM12 = 2,
+    ASSET_TYPE_CREDIT_ALPHANUM64 = 3
 };
 
 union Asset switch (AssetType type)
@@ -39,6 +40,15 @@ case ASSET_TYPE_CREDIT_ALPHANUM12:
         opaque assetCode[12]; // 5 to 12 characters
         AccountID issuer;
     } alphaNum12;
+
+    // the future is now 
+
+case ASSET_TYPE_CREDIT_ALPHANUM64:
+    struct
+    {
+        opaque assetCode[64]; // 13 to 64 characters
+        AccountID issuer;
+    } alphaNum64;
 
     // add other asset types here in the future
 };

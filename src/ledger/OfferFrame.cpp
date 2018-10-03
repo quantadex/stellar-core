@@ -23,10 +23,10 @@ const char* OfferFrame::kSQLCreateStatement1 =
     "sellerid         VARCHAR(56)  NOT NULL,"
     "offerid          BIGINT       NOT NULL CHECK (offerid >= 0),"
     "sellingassettype INT          NOT NULL,"
-    "sellingassetcode VARCHAR(12),"
+    "sellingassetcode VARCHAR(64),"
     "sellingissuer    VARCHAR(56),"
     "buyingassettype  INT          NOT NULL,"
-    "buyingassetcode  VARCHAR(12),"
+    "buyingassetcode  VARCHAR(64),"
     "buyingissuer     VARCHAR(56),"
     "amount           BIGINT           NOT NULL CHECK (amount >= 0),"
     "pricen           INT              NOT NULL,"
@@ -181,8 +181,8 @@ OfferFrame::loadOffers(StatementContext& prep,
     while (st.got_data())
     {
         oe.sellerID = KeyUtils::fromStrKey<PublicKey>(actIDStrKey);
-        if ((buyingAssetType > ASSET_TYPE_CREDIT_ALPHANUM12) ||
-            (sellingAssetType > ASSET_TYPE_CREDIT_ALPHANUM12))
+        if ((buyingAssetType > ASSET_TYPE_CREDIT_ALPHANUM64) ||
+            (sellingAssetType > ASSET_TYPE_CREDIT_ALPHANUM64))
             throw std::runtime_error("bad database state");
 
         oe.buying.type((AssetType)buyingAssetType);
@@ -200,6 +200,13 @@ OfferFrame::loadOffers(StatementContext& prep,
                 oe.selling.alphaNum12().issuer =
                     KeyUtils::fromStrKey<PublicKey>(sellingIssuerStrKey);
                 strToAssetCode(oe.selling.alphaNum12().assetCode,
+                               sellingAssetCode);
+            }
+            else if (sellingAssetType == ASSET_TYPE_CREDIT_ALPHANUM64)
+            {
+                oe.selling.alphaNum64().issuer =
+                    KeyUtils::fromStrKey<PublicKey>(sellingIssuerStrKey);
+                strToAssetCode(oe.selling.alphaNum64().assetCode,
                                sellingAssetCode);
             }
             else if (sellingAssetType == ASSET_TYPE_CREDIT_ALPHANUM4)
@@ -224,6 +231,13 @@ OfferFrame::loadOffers(StatementContext& prep,
                 oe.buying.alphaNum12().issuer =
                     KeyUtils::fromStrKey<PublicKey>(buyingIssuerStrKey);
                 strToAssetCode(oe.buying.alphaNum12().assetCode,
+                               buyingAssetCode);
+            }
+            else if (buyingAssetType == ASSET_TYPE_CREDIT_ALPHANUM64)
+            {
+                oe.buying.alphaNum64().issuer =
+                    KeyUtils::fromStrKey<PublicKey>(buyingIssuerStrKey);
+                strToAssetCode(oe.buying.alphaNum64().assetCode,
                                buyingAssetCode);
             }
             else if (buyingAssetType == ASSET_TYPE_CREDIT_ALPHANUM4)
@@ -265,6 +279,12 @@ OfferFrame::loadBestOffers(size_t numOffers, size_t offset,
             sellingIssuerStrKey =
                 KeyUtils::toStrKey(selling.alphaNum4().issuer);
         }
+        else if (selling.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+        {
+            assetCodeToStr(selling.alphaNum64().assetCode, sellingAssetCode);
+            sellingIssuerStrKey =
+                KeyUtils::toStrKey(selling.alphaNum64().issuer);
+        }
         else if (selling.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
         {
             assetCodeToStr(selling.alphaNum12().assetCode, sellingAssetCode);
@@ -290,6 +310,11 @@ OfferFrame::loadBestOffers(size_t numOffers, size_t offset,
         {
             assetCodeToStr(buying.alphaNum4().assetCode, buyingAssetCode);
             buyingIssuerStrKey = KeyUtils::toStrKey(buying.alphaNum4().issuer);
+        }
+        else if (buying.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+        {
+            assetCodeToStr(buying.alphaNum64().assetCode, buyingAssetCode);
+            buyingIssuerStrKey = KeyUtils::toStrKey(buying.alphaNum64().issuer);
         }
         else if (buying.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
         {
@@ -461,6 +486,13 @@ OfferFrame::storeUpdateHelper(LedgerDelta& delta, Database& db, bool insert)
         assetCodeToStr(mOffer.selling.alphaNum4().assetCode, sellingAssetCode);
         selling_ind = soci::i_ok;
     }
+    else if (sellingType == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        sellingIssuerStrKey =
+            KeyUtils::toStrKey(mOffer.selling.alphaNum64().issuer);
+        assetCodeToStr(mOffer.selling.alphaNum64().assetCode, sellingAssetCode);
+        selling_ind = soci::i_ok;
+    }
     else if (sellingType == ASSET_TYPE_CREDIT_ALPHANUM12)
     {
         sellingIssuerStrKey =
@@ -474,6 +506,13 @@ OfferFrame::storeUpdateHelper(LedgerDelta& delta, Database& db, bool insert)
         buyingIssuerStrKey =
             KeyUtils::toStrKey(mOffer.buying.alphaNum4().issuer);
         assetCodeToStr(mOffer.buying.alphaNum4().assetCode, buyingAssetCode);
+        buying_ind = soci::i_ok;
+    }
+    else if (buyingType == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        buyingIssuerStrKey =
+            KeyUtils::toStrKey(mOffer.buying.alphaNum64().issuer);
+        assetCodeToStr(mOffer.buying.alphaNum64().assetCode, buyingAssetCode);
         buying_ind = soci::i_ok;
     }
     else if (buyingType == ASSET_TYPE_CREDIT_ALPHANUM12)

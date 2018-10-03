@@ -25,7 +25,7 @@ const char* TrustFrame::kSQLCreateStatement1 =
     "accountid    VARCHAR(56)     NOT NULL,"
     "assettype    INT             NOT NULL,"
     "issuer       VARCHAR(56)     NOT NULL,"
-    "assetcode    VARCHAR(12)     NOT NULL,"
+    "assetcode    VARCHAR(64)     NOT NULL,"
     "tlimit       BIGINT          NOT NULL CHECK (tlimit > 0),"
     "balance      BIGINT          NOT NULL CHECK (balance >= 0),"
     "flags        INT             NOT NULL,"
@@ -72,6 +72,12 @@ TrustFrame::getKeyFields(LedgerKey const& key, std::string& actIDStrKey,
         issuerStrKey =
             KeyUtils::toStrKey(key.trustLine().asset.alphaNum4().issuer);
         assetCodeToStr(key.trustLine().asset.alphaNum4().assetCode, assetCode);
+    }
+    if (key.trustLine().asset.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        issuerStrKey =
+            KeyUtils::toStrKey(key.trustLine().asset.alphaNum64().issuer);
+        assetCodeToStr(key.trustLine().asset.alphaNum64().assetCode, assetCode);
     }
     else if (key.trustLine().asset.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
     {
@@ -369,6 +375,11 @@ TrustFrame::loadTrustLine(AccountID const& accountID, Asset const& asset,
         assetCodeToStr(asset.alphaNum4().assetCode, assetStr);
         issuerStr = KeyUtils::toStrKey(asset.alphaNum4().issuer);
     }
+    else if (asset.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        assetCodeToStr(asset.alphaNum64().assetCode, assetStr);
+        issuerStr = KeyUtils::toStrKey(asset.alphaNum64().issuer);
+    }
     else if (asset.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
     {
         assetCodeToStr(asset.alphaNum12().assetCode, assetStr);
@@ -452,6 +463,12 @@ TrustFrame::loadLines(StatementContext& prep,
             tl.asset.alphaNum4().issuer =
                 KeyUtils::fromStrKey<PublicKey>(issuerStrKey);
             strToAssetCode(tl.asset.alphaNum4().assetCode, assetCode);
+        }
+        if (assetType == ASSET_TYPE_CREDIT_ALPHANUM64)
+        {
+            tl.asset.alphaNum64().issuer =
+                KeyUtils::fromStrKey<PublicKey>(issuerStrKey);
+            strToAssetCode(tl.asset.alphaNum64().assetCode, assetCode);
         }
         else if (assetType == ASSET_TYPE_CREDIT_ALPHANUM12)
         {

@@ -72,6 +72,11 @@ AllowTrustOpFrame::doApply(Application& app, LedgerDelta& delta,
         ci.alphaNum4().assetCode = mAllowTrust.asset.assetCode4();
         ci.alphaNum4().issuer = getSourceID();
     }
+    else if (mAllowTrust.asset.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        ci.alphaNum64().assetCode = mAllowTrust.asset.assetCode64();
+        ci.alphaNum64().issuer = getSourceID();
+    }
     else if (mAllowTrust.asset.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
     {
         ci.alphaNum12().assetCode = mAllowTrust.asset.assetCode12();
@@ -122,6 +127,11 @@ AllowTrustOpFrame::doCheckValid(Application& app)
     {
         ci.alphaNum4().assetCode = mAllowTrust.asset.assetCode4();
         ci.alphaNum4().issuer = getSourceID();
+    }
+    else if (mAllowTrust.asset.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        ci.alphaNum64().assetCode = mAllowTrust.asset.assetCode64();
+        ci.alphaNum64().issuer = getSourceID();
     }
     else if (mAllowTrust.asset.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
     {
