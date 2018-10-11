@@ -469,6 +469,9 @@ Config::load(std::string const& filename)
             {
                 DATABASE = SecretValue{readString(item)};
             }
+            else if (item.first == "SETTLEMENT_ACC_ID") {
+                SETTLEMENT_ACC_ID = readString(item);
+            }
             else if (item.first == "NETWORK_PASSPHRASE")
             {
                 NETWORK_PASSPHRASE = readString(item);
