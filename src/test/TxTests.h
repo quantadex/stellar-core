@@ -129,6 +129,9 @@ Operation setOptions(AccountID* inflationDest, uint32_t* setFlags,
 Asset makeNativeAsset();
 Asset makeInvalidAsset();
 Asset makeAsset(SecretKey const& issuer, std::string const& code);
+// not to break existing tests - this doesn't presume that the Asset is
+// of ASSET_TYPE_CREDIT_ALPHANUM4 type
+Asset makeLongerAsset(SecretKey const& issuer, std::string const& code);
 
 OperationFrame const& getFirstOperationFrame(TransactionFrame const& tx);
 OperationResult const& getFirstResult(TransactionFrame const& tx);

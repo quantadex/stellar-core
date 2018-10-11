@@ -348,6 +348,24 @@ makeAsset(SecretKey const& issuer, std::string const& code)
     return asset;
 }
 
+Asset
+makeLongerAsset(SecretKey const& issuer, std::string const& code)
+{
+    Asset asset;
+    REQUIRE(code.size() > 4);
+    if (code.size() < 13){
+        asset.type(ASSET_TYPE_CREDIT_ALPHANUM12);
+        asset.alphaNum12().issuer = issuer.getPublicKey();
+        strToAssetCode(asset.alphaNum12().assetCode, code);
+    }
+    else {
+        asset.type(ASSET_TYPE_CREDIT_ALPHANUM64);
+        asset.alphaNum64().issuer = issuer.getPublicKey();
+        strToAssetCode(asset.alphaNum64().assetCode, code);
+    }
+    return asset;
+}
+
 Operation
 pathPayment(PublicKey const& to, Asset const& sendCur, int64_t sendMax,
             Asset const& destCur, int64_t destAmount,

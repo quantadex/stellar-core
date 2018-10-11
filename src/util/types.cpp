@@ -124,15 +124,57 @@ isAssetValid(Asset const& cur)
         }
         return charcount > 4;
     }
+
+    if (cur.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        auto const& code = cur.alphaNum64().assetCode;
+        bool zeros = false;
+        int charcount = 0; // at least 13 non zero characters
+        for (uint8_t b : code)
+        {
+            if (b == 0)
+            {
+                zeros = true;
+            }
+            else if (zeros)
+            {
+                // zeros can only be trailing
+                return false;
+            }
+            else
+            {
+                if (b > 0x7F || !std::isalnum((char)b, cLocale))
+                {
+                    if (b != ',') 
+                    {
+                        return false;
+                    }
+                }
+                charcount++;
+            }
+        }
+        return charcount > 12;
+    }
     return false;
 }
 
 AccountID
 getIssuer(Asset const& asset)
 {
-    return (asset.type() == ASSET_TYPE_CREDIT_ALPHANUM4
-                ? asset.alphaNum4().issuer
-                : asset.alphaNum12().issuer);
+    AccountID ret;
+    switch(asset.type()) {
+        case ASSET_TYPE_CREDIT_ALPHANUM4:
+            ret = asset.alphaNum4().issuer;
+            break;
+        case ASSET_TYPE_CREDIT_ALPHANUM12:
+            ret = asset.alphaNum12().issuer;
+            break;
+        case ASSET_TYPE_CREDIT_ALPHANUM64:
+        default: // none of the above will immediately blow up
+            ret = asset.alphaNum64().issuer;
+            break;    
+    }
+    return ret;
 }
 
 bool
@@ -148,6 +190,13 @@ compareAsset(Asset const& first, Asset const& second)
     {
         if ((first.alphaNum4().issuer == second.alphaNum4().issuer) &&
             (first.alphaNum4().assetCode == second.alphaNum4().assetCode))
+            return true;
+    }
+    
+    if (second.type() == ASSET_TYPE_CREDIT_ALPHANUM64)
+    {
+        if ((first.alphaNum64().issuer == second.alphaNum64().issuer) &&
+            (first.alphaNum64().assetCode == second.alphaNum64().assetCode))
             return true;
     }
 
