@@ -48,18 +48,34 @@ SettlementOpFrame::validateTrustlines(const AccountFrame::pointer& account,
             return SETTLEMENT_SELL_NO_ISSUER;
         }
         if(!trustLineSellAsset) { // don't have what we are trying to sell
-            metrics
-                .NewMeter({"op-settlement", "invalid", "sell-no-trust"},
-                          "operation")
-                .Mark();
-            return SETTLEMENT_SELL_NO_TRUST;
-        }
-        if(!trustLineSellAsset->isAuthorized()) { // not authorized to sell
-            metrics
-                .NewMeter({"op-settlement", "invalid", "sell-not-authorized"},
-                          "operation")
-                .Mark();
-            return SETTLEMENT_SELL_NOT_AUTHORIZED;
+            //     metrics
+            //         .NewMeter({"op-settlement", "invalid", "sell-no-trust"},
+            //                   "operation")
+            //         .Mark();
+            //     return SETTLEMENT_SELL_NO_TRUST;
+            // }
+            // if(!trustLineSellAsset->isAuthorized()) { // not authorized to sell
+            //     metrics
+            //         .NewMeter({"op-settlement", "invalid", "sell-not-authorized"},
+            //                   "operation")
+            //         .Mark();
+            //     return SETTLEMENT_SELL_NOT_AUTHORIZED;
+
+            trustLineSellAsset = std::make_shared<TrustFrame>();
+            auto& tl = trustLineSellAsset->getTrustLine();
+            tl.accountID = account->getID();
+            tl.asset = sellAss;
+            tl.limit = INT64_MAX;
+            tl.balance = 0;
+            trustLineSellAsset->setAuthorized(true);
+
+            if (!account->addNumEntries(1, ledgerManager))
+            {
+                return SETTLEMENT_SELL_NOT_AUTHORIZED;
+            }
+
+            account->storeChange(delta, db);
+            trustLineSellAsset->storeAdd(delta, db);
         }
     }
     if(buyAss.type() != ASSET_TYPE_NATIVE)
