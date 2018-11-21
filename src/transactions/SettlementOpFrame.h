@@ -43,11 +43,12 @@ public:
         return res.tr().settlementResult().code();
     }
 
-    SettlementResultCode validateTrustlines(AccountID const& accountId,
-                                           Asset const& buyAss, Asset const& sellAss,
-                                           medida::MetricsRegistry& metrics,
-                                           Database& db, LedgerDelta& delta,
-                                           TrustFrame::pointer &trustLineBuyAsset,
-                                           TrustFrame::pointer &trustLineSellAsset);
+    SettlementResultCode
+    validateTrustlines(const AccountFrame::pointer& account,
+                       Asset const& buyAss, Asset const& sellAss,
+                       medida::MetricsRegistry& metrics, Database& db,
+                       LedgerDelta& delta, LedgerManager& ledgerManager,
+                       TrustFrame::pointer& trustLineBuyAsset,
+                       TrustFrame::pointer& trustLineSellAsset);
 };
 }

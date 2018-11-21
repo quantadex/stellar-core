@@ -27,17 +27,18 @@ SettlementOpFrame::SettlementOpFrame(Operation const& op, OperationResult& res,
 }
 
 SettlementResultCode
-SettlementOpFrame::validateTrustlines(AccountID const& accountId,
-                                     Asset const& buyAss, Asset const& sellAss,
-                                     medida::MetricsRegistry& metrics, 
-                                     Database& db, LedgerDelta& delta,
-                                     TrustFrame::pointer &trustLineBuyAsset,
-                                     TrustFrame::pointer &trustLineSellAsset)
+SettlementOpFrame::validateTrustlines(const AccountFrame::pointer& account,
+                                      Asset const& buyAss, Asset const& sellAss,
+                                      medida::MetricsRegistry& metrics,
+                                      Database& db, LedgerDelta& delta,
+                                      LedgerManager& ledgerManager,
+                                      TrustFrame::pointer& trustLineBuyAsset,
+                                      TrustFrame::pointer& trustLineSellAsset)
 {
     if(sellAss.type() != ASSET_TYPE_NATIVE)
     {
-        auto tlI =
-            TrustFrame::loadTrustLineIssuer(accountId, sellAss, db, delta);
+        auto tlI = TrustFrame::loadTrustLineIssuer(account->getID(), sellAss,
+                                                   db, delta);
         trustLineSellAsset = tlI.first;
         if(!tlI.second) {
             metrics
@@ -64,7 +65,7 @@ SettlementOpFrame::validateTrustlines(AccountID const& accountId,
     if(buyAss.type() != ASSET_TYPE_NATIVE)
     {
         auto tlI =
-            TrustFrame::loadTrustLineIssuer(accountId, buyAss, db, delta);
+            TrustFrame::loadTrustLineIssuer(account->getID(), buyAss, db, delta);
         trustLineBuyAsset = tlI.first;
         if(!tlI.second) {
             metrics
@@ -74,19 +75,36 @@ SettlementOpFrame::validateTrustlines(AccountID const& accountId,
             return SETTLEMENT_BUY_NO_ISSUER;
         }
         if(!trustLineBuyAsset) { // the buyer can't hold what he's trying to buy
-            metrics
-                .NewMeter({"op-settlement", "invalid", "buy-no-trust"},
-                          "operation")
-                .Mark();
-            return SETTLEMENT_BUY_NO_TRUST;
-        }
-        if(!trustLineBuyAsset->isAuthorized()) {
-            // buyer not authorized to hold what he tries to buy 
-            metrics
-                .NewMeter({"op-settlement", "invalid", "buy-not-authorized"},
-                          "operation")
-                .Mark();
-            return SETTLEMENT_BUY_NOT_AUTHORIZED;
+            //     metrics
+            //         .NewMeter({"op-settlement", "invalid", "buy-no-trust"},
+            //                   "operation")
+            //         .Mark();
+            //     return SETTLEMENT_BUY_NO_TRUST;
+            // }
+            // if(!trustLineBuyAsset->isAuthorized()) {
+            //     // buyer not authorized to hold what he tries to buy 
+            //     metrics
+            //         .NewMeter({"op-settlement", "invalid", "buy-not-authorized"},
+            //                   "operation")
+            //         .Mark();
+            //     return SETTLEMENT_BUY_NOT_AUTHORIZED;
+
+            // let's autocreate this
+            trustLineBuyAsset = std::make_shared<TrustFrame>();
+            auto& tl = trustLineBuyAsset->getTrustLine();
+            tl.accountID = account->getID();
+            tl.asset = buyAss;
+            tl.limit = INT64_MAX;
+            tl.balance = 0;
+            trustLineBuyAsset->setAuthorized(true);
+
+            if (!account->addNumEntries(1, ledgerManager))
+            {
+                return SETTLEMENT_BUY_NOT_AUTHORIZED;
+            }
+
+            account->storeChange(delta, db);
+            trustLineBuyAsset->storeAdd(delta, db);
         }
     }
     return SETTLEMENT_SUCCESS;
@@ -153,15 +171,18 @@ SettlementOpFrame::doApply(Application& app, LedgerDelta& delta,
             // apply the order 
             //
             SettlementResultCode validationRes;
-            if((validationRes = validateTrustlines(bacc, bass, sass, metrics, db,
-                                                 delta, mBuyAssetBuyer,
-                                                  mSellAssetBuyer)) != SETTLEMENT_SUCCESS) {
+            if ((validationRes =
+                     validateTrustlines(mAccBuyer, bass, sass, metrics, db, delta,
+                                        ledgerManager, mBuyAssetBuyer,
+                                        mSellAssetBuyer)) != SETTLEMENT_SUCCESS)
+            {
                 innerResult().codesVec()[ind++] = validationRes;
                 continue; 
             }
-            if((validationRes = validateTrustlines(sacc, bass, sass, metrics, db,
-                                                 delta, mBuyAssetSeller,
-                                                  mSellAssetSeller)) != SETTLEMENT_SUCCESS) {
+            if ((validationRes = validateTrustlines(
+                     mAccSeller, bass, sass, metrics, db, delta, ledgerManager,
+                     mBuyAssetSeller, mSellAssetSeller)) != SETTLEMENT_SUCCESS)
+            {
                 innerResult().codesVec()[ind++] = validationRes;
                 continue; 
             }
